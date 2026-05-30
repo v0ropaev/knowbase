@@ -1,0 +1,104 @@
+name: Bug report
+description: Report incorrect, missing, or stale knowledge, a crash, or any other defect.
+title: "[bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug.
+
+        knowbase is built around a **provenance spine**: every stored unit is bound to at least one
+        exact code span (`file:line@sha`). When something looks wrong, the most useful reports tell us
+        **which span / artifact** is affected and **at which commit**, so we can reproduce against the
+        same git state.
+
+        Before filing, please search existing issues to avoid duplicates.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: A clear and concise description of the bug. Include the affected artifact (span, import edge, invalidation, stored knowledge unit) and its provenance if you have it.
+      placeholder: |
+        e.g. `kb index` stored an import edge for a span that no longer exists at the given SHA, or
+        get_knowledge returned a unit whose provenance points at the wrong file:line.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Exact steps, including the **repository and language analyzed** and the commit SHA. Prefer a
+        minimal public repo or a small snippet that triggers the issue. Include the full command line.
+      placeholder: |
+        1. Repo analyzed: https://github.com/<owner>/<repo> (language: Python)
+        2. Commit SHA: <40-char sha>
+        3. Command:
+           uv run kb index <repo> --sha <sha> --db-url postgresql+psycopg://user:pass@127.0.0.1:5432/db
+        4. Then query / inspect: <what you did next>
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened. Note any failed eval gate (identity, adversarial grounding, Tier-1 import oracle, Tier-4 invalidation, invariants) if relevant.
+    validations:
+      required: true
+  - type: input
+    id: kb-version
+    attributes:
+      label: knowbase version / commit
+      description: Output of the installed version, or the git commit SHA you are running.
+      placeholder: "0.1.0 (or commit bcdbdef)"
+    validations:
+      required: true
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      description: Output of `python --version` (3.12+ required).
+      placeholder: "3.12.x"
+    validations:
+      required: true
+  - type: input
+    id: postgres-version
+    attributes:
+      label: PostgreSQL version
+      description: Server version (17 expected). Note if you used an ephemeral local cluster or KB_TEST_DB_URL.
+      placeholder: "17.x"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "macOS 15 / Ubuntu 24.04 / ..."
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / traceback
+      description: Relevant log output, full Python traceback, or the failing pytest output. This will be rendered as code, so no backticks needed.
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmation
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I included the analyzed repository/language and the commit SHA needed to reproduce.
+          required: true
