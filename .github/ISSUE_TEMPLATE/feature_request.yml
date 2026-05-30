@@ -1,0 +1,73 @@
+name: Feature request
+description: Propose a new capability or an improvement to an existing one.
+title: "[feat]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing an improvement.
+
+        knowbase extracts **durable, provenance-grounded knowledge** from a repository and keeps it
+        current relative to git history. It is deliberately **not** RAG-over-code and **not** an AI
+        code generator. Proposals that strengthen stable extraction, the provenance spine, or honest
+        evaluation are especially welcome. New extractors should remain grounded (every stored unit
+        bound to >= 1 exact code span) and, where deterministic, ship with an eval gate.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What problem are you trying to solve? What is the concrete use case, and who benefits (a human reader, an AI agent via MCP, CI)?
+      placeholder: |
+        e.g. "When extracting FastAPI route contracts, there is no way to ..."
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior you want. If it changes what is stored or served, explain how it stays grounded in provenance (span + method + confidence + freshness).
+    validations:
+      required: true
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Which layer does this touch?
+      description: Select the primary layer. Pick "multiple / unsure" if it spans several.
+      multiple: true
+      options:
+        - extractor (structural / deterministic / future LLM-backed)
+        - store (PostgreSQL, schema, invariants, migrations)
+        - git (ingest, diff-based invalidation)
+        - mcp (serving to agents / API)
+        - eval (CI gates, oracles, benchmarks)
+        - ids / identity (hashing, normalization)
+        - cli / daemon
+        - docs
+        - multiple / unsure
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you evaluated, and why you did not choose them. Note any prior art (e.g. doing this purely via RAG) and why grounded extraction is better here.
+    validations:
+      required: false
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Anything else — links, sketches, affected languages, impact on the identity rule or NORMALIZATION_VERSION.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmation
+      options:
+        - label: I searched existing issues and discussions and this is not a duplicate.
+          required: true
+        - label: This proposal keeps stored knowledge grounded in provenance (or I explain why it should not).
+          required: true
