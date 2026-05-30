@@ -6,10 +6,14 @@ FastAPI oracle) are stubs in this push — they belong to the next push (DESIGN.
 
 from __future__ import annotations
 
+import json
+
 import typer
 
 from kb.daemon.pipeline import index_commit
+from kb.extract.deterministic.fastapi_contract import FastAPIExtractor
 from kb.extract.deterministic.imports import ImportExtractor
+from kb.introspect import introspect_app
 from kb.store.engine import make_engine
 
 app = typer.Typer(no_args_is_help=True, help="knowbase — a provenance-grounded knowledge layer.")
@@ -23,7 +27,7 @@ def index(
 ) -> None:
     """Index one commit: ingest, parse spans, run deterministic extractors, write the snapshot."""
     engine = make_engine(db_url)
-    result = index_commit(engine, repo, sha, extractors=[ImportExtractor()])
+    result = index_commit(engine, repo, sha, extractors=[ImportExtractor(), FastAPIExtractor()])
     engine.dispose()
     typer.echo(
         f"indexed {result.sha[:12]}: {result.files_indexed} files, {result.spans} spans, "
@@ -41,10 +45,17 @@ def serve() -> None:
 
 
 @app.command()
-def introspect(app_import: str) -> None:
-    """Emit a FastAPI app's openapi() as an eval oracle artifact (next push)."""
-    typer.echo(f"kb introspect {app_import}: runtime oracle is in the next push (DESIGN.md §8).")
-    raise typer.Exit(code=1)
+def introspect(
+    app_import: str = typer.Argument(..., help="module:appvar, e.g. app.main:app"),
+    repo: str = typer.Option(".", "--repo", help="Repo root the app imports from."),
+    root: str = typer.Option("", "--root", help="First-party subdir for sys.path, e.g. src"),
+    timeout: float = typer.Option(15.0, "--timeout", help="Sandbox wall-clock timeout (seconds)."),
+) -> None:
+    """Emit a FastAPI app's openapi() as JSON, run in a sandbox (eval oracle; never on `index`)."""
+    result = introspect_app(
+        app_import, cwd=repo, extra_sys_path=[root] if root else (), timeout_s=timeout
+    )
+    typer.echo(json.dumps(result.openapi, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

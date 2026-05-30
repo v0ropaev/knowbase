@@ -25,6 +25,9 @@ dev = [
     "pyyaml>=6",
     "ruff>=0.6",
     "mypy>=1.10",
+    # fastapi powers the eval oracle (kb introspect) and the Tier-1 API gate only; the serving
+    # extractor is tree-sitter-static and never imports it.
+    "fastapi>=0.110",
 ]
 
 [project.scripts]
@@ -61,5 +64,5 @@ module = ["kb.eval.*"]
 ignore_errors = true
 
 [[tool.mypy.overrides]]
-module = ["pygit2.*", "grimp.*", "sqlparse.*"]
+module = ["pygit2.*", "grimp.*", "sqlparse.*", "fastapi.*", "starlette.*"]
 ignore_missing_imports = true
