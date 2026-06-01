@@ -38,10 +38,17 @@ def index(
 
 
 @app.command()
-def serve() -> None:
-    """Run the read-only MCP server (next push)."""
-    typer.echo("kb serve: MCP server is part of the next push (DESIGN.md §8).")
-    raise typer.Exit(code=1)
+def serve(
+    db_url: str | None = typer.Option(None, "--db-url", help="Postgres URL (else KB_DB_URL env)."),
+) -> None:
+    """Run the read-only MCP server over stdio (find_provenance, get_knowledge)."""
+    from kb.mcp.server import build_server  # local import keeps fastmcp off the `index` path
+
+    engine = make_engine(db_url)
+    try:
+        build_server(engine).run()
+    finally:
+        engine.dispose()
 
 
 @app.command()

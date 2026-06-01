@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
+from dataclasses import dataclass
+from typing import Any, cast
 
-from sqlalchemy import Connection, select
+from sqlalchemy import Connection, and_, or_, select
 
 from kb.store import models as m
 
@@ -48,3 +50,248 @@ def logical_keys_for_artifacts(
         )
     ).scalars()
     return set(rows)
+
+
+# --- MCP read side (DESIGN.md §10) -----------------------------------------
+
+
+@dataclass(frozen=True)
+class SpanHitRow:
+    span_id: bytes  # internal — never surfaced in MCP records
+    span_kind: str
+    fq_symbol_path: str
+    file_path: str
+    start_line: int
+    end_line: int
+
+
+@dataclass(frozen=True)
+class GroundedArtifactRow:
+    logical_key: str
+    kind: str
+    payload: dict[str, Any]
+    is_deterministic: bool
+    confidence: float
+    role: str | None  # grounding-edge role for a span (None for unit-level fetches)
+
+
+@dataclass(frozen=True)
+class ProvenanceRow:
+    file_path: str
+    start_line: int
+    end_line: int
+    role: str | None
+
+
+def latest_ingested_sha(conn: Connection) -> str | None:
+    """The most-recently-ingested snapshot sha (ingest order, not git topology — DESIGN.md §10)."""
+    stmt = (
+        select(m.commit_ref.c.sha)
+        .join(m.snapshot_entry, m.snapshot_entry.c.sha == m.commit_ref.c.sha)
+        .order_by(m.commit_ref.c.ingested_at.desc(), m.commit_ref.c.sha)
+        .limit(1)
+    )
+    return cast("str | None", conn.execute(stmt).scalar())
+
+
+def latest_sha_for_logical_key(conn: Connection, logical_key: str) -> str | None:
+    """The most-recently-ingested sha whose snapshot contains ``logical_key`` (drives freshness)."""
+    stmt = (
+        select(m.commit_ref.c.sha)
+        .select_from(
+            m.snapshot_entry.join(m.commit_ref, m.commit_ref.c.sha == m.snapshot_entry.c.sha)
+        )
+        .where(m.snapshot_entry.c.logical_key == logical_key)
+        .order_by(m.commit_ref.c.ingested_at.desc(), m.commit_ref.c.sha)
+        .limit(1)
+    )
+    return cast("str | None", conn.execute(stmt).scalar())
+
+
+def spans_at_location(conn: Connection, file: str, line: int, sha: str) -> list[SpanHitRow]:
+    """Spans whose occurrence at ``sha`` covers ``file:line`` (1-based)."""
+    join = m.code_span.join(m.span_occurrence, m.span_occurrence.c.span_id == m.code_span.c.span_id)
+    rows = conn.execute(
+        select(
+            m.code_span.c.span_id,
+            m.code_span.c.span_kind,
+            m.code_span.c.fq_symbol_path,
+            m.span_occurrence.c.file_path,
+            m.span_occurrence.c.start_line,
+            m.span_occurrence.c.end_line,
+        )
+        .select_from(join)
+        .where(
+            m.span_occurrence.c.file_path == file,
+            m.span_occurrence.c.sha == sha,
+            m.span_occurrence.c.start_line <= line,
+            m.span_occurrence.c.end_line >= line,
+        )
+        .order_by(
+            m.span_occurrence.c.start_line,
+            m.span_occurrence.c.end_line.desc(),
+            m.code_span.c.fq_symbol_path,
+        )
+    ).all()
+    return [SpanHitRow(*row) for row in rows]
+
+
+def artifacts_grounded_on_span(
+    conn: Connection, sha: str, span_id: bytes
+) -> list[GroundedArtifactRow]:
+    """Artifacts in ``sha``'s snapshot grounded on ``span_id``, each with its grounding role."""
+    join = m.snapshot_entry.join(
+        m.artifact, m.artifact.c.artifact_id == m.snapshot_entry.c.artifact_id
+    ).join(
+        m.artifact_derived_from,
+        m.artifact_derived_from.c.artifact_id == m.artifact.c.artifact_id,
+    )
+    rows = conn.execute(
+        select(
+            m.artifact.c.logical_key,
+            m.artifact.c.kind,
+            m.artifact.c.payload,
+            m.artifact.c.is_deterministic,
+            m.artifact.c.confidence,
+            m.artifact_derived_from.c.role,
+        )
+        .select_from(join)
+        .where(m.snapshot_entry.c.sha == sha, m.artifact_derived_from.c.span_id == span_id)
+        .order_by(m.artifact.c.logical_key)
+    ).all()
+    return [GroundedArtifactRow(*row) for row in rows]
+
+
+def provenance_for_artifact(conn: Connection, sha: str, logical_key: str) -> list[ProvenanceRow]:
+    """Grounding occurrences (file:line@sha + role) for the ``(sha, logical_key)`` artifact."""
+    join = m.snapshot_entry.join(
+        m.artifact_derived_from,
+        m.artifact_derived_from.c.artifact_id == m.snapshot_entry.c.artifact_id,
+    ).join(
+        m.span_occurrence,
+        and_(
+            m.span_occurrence.c.span_id == m.artifact_derived_from.c.span_id,
+            m.span_occurrence.c.sha == sha,
+        ),
+    )
+    rows = conn.execute(
+        select(
+            m.span_occurrence.c.file_path,
+            m.span_occurrence.c.start_line,
+            m.span_occurrence.c.end_line,
+            m.artifact_derived_from.c.role,
+        )
+        .select_from(join)
+        .where(m.snapshot_entry.c.sha == sha, m.snapshot_entry.c.logical_key == logical_key)
+        .order_by(
+            m.span_occurrence.c.file_path,
+            m.span_occurrence.c.start_line,
+            m.artifact_derived_from.c.role,
+        )
+    ).all()
+    return [ProvenanceRow(*row) for row in rows]
+
+
+def _like_literal(value: str, suffix: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return escaped + suffix
+
+
+def resolve_target_logical_keys(conn: Connection, sha: str, target: str) -> list[str]:
+    """Resolve ``target`` to logical keys: exact, then prefix, then file, then module."""
+
+    def _scalars(stmt: Any) -> list[str]:
+        return [str(value) for value in conn.execute(stmt).scalars()]
+
+    exact = _scalars(
+        select(m.snapshot_entry.c.logical_key).where(
+            m.snapshot_entry.c.sha == sha, m.snapshot_entry.c.logical_key == target
+        )
+    )
+    if exact:
+        return exact
+
+    prefix = _scalars(
+        select(m.snapshot_entry.c.logical_key)
+        .where(
+            m.snapshot_entry.c.sha == sha,
+            m.snapshot_entry.c.logical_key.like(_like_literal(target, "%"), escape="\\"),
+        )
+        .distinct()
+        .order_by(m.snapshot_entry.c.logical_key)
+    )
+    if prefix:
+        return prefix
+
+    by_file = _scalars(
+        select(m.snapshot_entry.c.logical_key)
+        .select_from(
+            m.snapshot_entry.join(
+                m.artifact_derived_from,
+                m.artifact_derived_from.c.artifact_id == m.snapshot_entry.c.artifact_id,
+            ).join(
+                m.span_occurrence,
+                and_(
+                    m.span_occurrence.c.span_id == m.artifact_derived_from.c.span_id,
+                    m.span_occurrence.c.sha == sha,
+                ),
+            )
+        )
+        .where(m.snapshot_entry.c.sha == sha, m.span_occurrence.c.file_path == target)
+        .distinct()
+        .order_by(m.snapshot_entry.c.logical_key)
+    )
+    if by_file:
+        return by_file
+
+    by_module = _scalars(
+        select(m.snapshot_entry.c.logical_key)
+        .select_from(
+            m.snapshot_entry.join(
+                m.artifact_derived_from,
+                m.artifact_derived_from.c.artifact_id == m.snapshot_entry.c.artifact_id,
+            ).join(m.code_span, m.code_span.c.span_id == m.artifact_derived_from.c.span_id)
+        )
+        .where(
+            m.snapshot_entry.c.sha == sha,
+            or_(
+                m.code_span.c.fq_symbol_path == target,
+                m.code_span.c.fq_symbol_path.like(_like_literal(target, ".%"), escape="\\"),
+            ),
+        )
+        .distinct()
+        .order_by(m.snapshot_entry.c.logical_key)
+    )
+    return by_module
+
+
+def units_for_logical_keys(
+    conn: Connection, sha: str, logical_keys: Sequence[str]
+) -> list[GroundedArtifactRow]:
+    """Batch-fetch artifact rows for ``logical_keys`` in the snapshot (unit-level role=None)."""
+    if not logical_keys:
+        return []
+    join = m.snapshot_entry.join(
+        m.artifact, m.artifact.c.artifact_id == m.snapshot_entry.c.artifact_id
+    )
+    rows = conn.execute(
+        select(
+            m.artifact.c.logical_key,
+            m.artifact.c.kind,
+            m.artifact.c.payload,
+            m.artifact.c.is_deterministic,
+            m.artifact.c.confidence,
+        )
+        .select_from(join)
+        .where(
+            m.snapshot_entry.c.sha == sha,
+            m.snapshot_entry.c.logical_key.in_(list(logical_keys)),
+        )
+        .order_by(m.artifact.c.logical_key)
+    ).all()
+    return [
+        GroundedArtifactRow(
+            r.logical_key, r.kind, r.payload, r.is_deterministic, r.confidence, None
+        )
+        for r in rows
+    ]
