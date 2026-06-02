@@ -17,15 +17,16 @@ knowbase turns a git repository into a **Knowledge Layer**: a queryable, git-ver
 
 The one thing that makes it different: it does not embed your code and hope. It **extracts** durable knowledge and grounds each unit in a real code span. LLMs and embeddings are *replaceable adapters* around that spine — swap the model, the knowledge and its provenance stay.
 
-```
-   The usual pipeline (lossy, opaque):
-     Repository ──▶ Embeddings ──▶ AI Agent
-                   (chunks, no provenance, drifts from HEAD)
-
-   knowbase (grounded, versioned):
-     Repository ──▶ Knowledge Extraction ──▶ Knowledge Layer ──▶ AI Agent
-                    (deterministic + LLM       (provenance + method +
-                     adapters)                  confidence + freshness)
+```mermaid
+flowchart LR
+    subgraph usual["The usual pipeline — lossy, opaque"]
+        direction LR
+        R1[Repository] --> E1["Embeddings<br/>chunks, no provenance,<br/>drifts from HEAD"] --> A1[AI Agent]
+    end
+    subgraph kbflow["knowbase — grounded, versioned"]
+        direction LR
+        R2[Repository] --> X2["Knowledge Extraction<br/>deterministic + LLM adapters"] --> K2["Knowledge Layer<br/>provenance · method ·<br/>confidence · freshness"] --> A2[AI Agent]
+    end
 ```
 
 ## Why
@@ -48,27 +49,48 @@ Identity is **content-addressed and location-free by construction**. A span's `s
 
 Artifacts are content-addressed the same way — over their byte-sorted, de-duplicated grounding spans plus `extractor_id`/`extractor_version` (and `prompt_version`/`model_id` for model-backed extractors). Re-indexing the same commit reproduces the identical set of artifact ids.
 
+The spine is a handful of content-addressed tables: each **artifact** carries ≥ 1 `derived_from` edge to a **code_span**, spans are located **per-SHA** in `span_occurrence`, and a per-SHA **snapshot** ties the grounded artifacts to a commit.
+
+```mermaid
+flowchart TD
+    AR["artifact<br/>knowledge unit (+ embedding)"]
+    CS["code_span<br/>content-addressed id · location-free"]
+    SO["span_occurrence<br/>file:line @ sha"]
+    SE["snapshot_entry<br/>per-SHA manifest"]
+    CM["commit_ref / branch_ref"]
+    AR -->|"derived_from ≥1 (else rejected:<br/>GroundingError + DB trigger)"| CS
+    CS -->|"located per-SHA"| SO
+    AR -->|"appears in"| SE
+    SE -->|"scoped to"| CM
 ```
-  INGEST          STRUCTURE             EXTRACT                SNAPSHOT          SERVE
-  ──────          ─────────             ───────                ────────          ─────
-  git blobs   ─▶  tree-sitter spans ─▶  deterministic +    ─▶  per-SHA       ─▶  humans +
-  at a SHA        + content-addressed   (later) model          manifest of       AI agents
-  (no checkout)   identity              extractors,            grounded          (MCP)
-                                        each grounded          artifacts
-                                        ≥1 span
+
+Indexing one commit walks that spine end to end — `INGEST → STRUCTURE → INVALIDATE → EXTRACT → SNAPSHOT → SERVE`, with `kb embed` as a separate pass that adds pgvector semantic search on top:
+
+```mermaid
+flowchart LR
+    G["git blobs @ SHA<br/>no checkout"] --> S["tree-sitter spans<br/>content-addressed identity"]
+    S --> I["invalidate<br/>diff-based"]
+    I --> X["extractors<br/>deterministic · each grounded ≥1 span"]
+    X --> N["per-SHA snapshot<br/>manifest of grounded artifacts"]
+    N --> EV["eval gate"]
+    EV --> SV["serve<br/>humans + AI agents (MCP)"]
+    N -. "kb embed (separate pass)" .-> EM["pgvector embeddings<br/>semantic search"]
+    EM -.-> SV
 ```
 
 ## Status
 
-**v0.1 — the MVP "provenance spine."** This release ships the foundation that everything else hangs off of, and nothing it cannot ground:
+**v0.2 — spine + the first knowledge extractors, MCP serving, and the knowledge-vs-RAG gate.** Everything here grounds what it claims, and nothing it cannot:
 
-- **Structural identity** — content-addressed `span_id` (LOCKED); tree-sitter span extraction with a normalized S-expression fingerprint; per-SHA location.
-- **Single-Postgres store** — Alembic-managed schema; content-addressed, idempotent writes; the ≥ 1 `derived_from` anti-hallucination invariant enforced in-app *and* by a deferred DB trigger.
-- **Git ingest** — pygit2 reads blobs at a SHA (no checkout); diff-based invalidation seed.
-- **Deterministic import extractor** — first-party module→module dependency edges; grimp resolves the edge, tree-sitter grounds it on the exact import statement (with an honest `approximate` fallback for re-exports / relative / unmappable imports, never a silent loss).
-- **Five HARD CI eval gates** (see [Development](#development)).
+- **Provenance spine** — content-addressed `span_id` (LOCKED); tree-sitter spans with a normalized S-expression fingerprint and per-SHA location; a single-Postgres, Alembic-managed store with content-addressed idempotent writes; the ≥ 1 `derived_from` anti-hallucination invariant enforced in-app *and* by a deferred DB trigger; pygit2 git ingest (no checkout) with a diff-based invalidation seed.
+- **Deterministic extractors** — the **import / dependency graph** (grimp resolves the edge, tree-sitter grounds it on the exact import statement, with an honest `approximate` fallback for re-exports / relative / unmappable imports — never a silent loss), and the **FastAPI API-contract** extractor, which grounds a single route **across files** (handler in `routes.py` + `response_model` class in `schemas.py`).
+- **`kb introspect`** — a sandboxed, network-blocked `app.openapi()` oracle, eval-only and never on the index path, that the API gate scores the static contract against.
+- **Read-only MCP server** — `find_provenance`, `get_knowledge`, and `search_knowledge`, each returning provenance-carrying units (method + confidence + freshness).
+- **pgvector embeddings + semantic search** — a replaceable embedding provider (sentence-transformers by default, OpenAI optional) populated by a separate `kb embed` pass; torch stays out of the index path.
+- **A frozen RAG-over-source baseline** and the **Tier-3 knowledge-vs-RAG recall gate** — the honest A/B that backs the "knowledge > RAG" thesis.
+- **Seven HARD CI eval gates** (see [Development](#development)).
 
-**Not done yet** (and deliberately not faked): the semantic / LLM extraction layer, the read-only **MCP server** (`find_provenance`, `get_knowledge`), the **FastAPI API-contract extractor**, embeddings + pgvector semantic search, and the pgvector RAG A/B baseline. The `kb serve` and `kb introspect` commands are stubs today. See the [Roadmap](#roadmap).
+**Not done yet** (and deliberately not faked): the semantic / **LLM-grounded** extraction layer, the nightly LLM-judged A/B, ADR mining from git history, grounded business-process extraction, incremental re-index on git push, and languages beyond Python. See the [Roadmap](#roadmap).
 
 ## Quickstart
 
@@ -82,12 +104,15 @@ Artifacts are content-addressed the same way — over their byte-sorted, de-dupl
 
 ```bash
 uv sync --extra dev            # create the venv + install everything
+uv sync --extra dev --extra embed   # add the embedding stack (CPU torch) for `kb embed` + semantic search
 ```
+
+The base `--extra dev` install stays torch-free; the `embed` extra pulls sentence-transformers (CPU-only torch via a pinned index) and is only needed for `kb embed` and `search_knowledge`.
 
 ### Run the gates
 
 ```bash
-uv run pytest src/kb/eval -q   # the five HARD gates (spins an ephemeral local Postgres)
+uv run pytest src/kb/eval -q   # the seven HARD gates (spins an ephemeral local Postgres)
 ```
 
 ### Index a commit
@@ -106,6 +131,36 @@ indexed 4f1c2a9b8d3e: 12 files, 318 spans, 27 artifacts, 1 gaps
 
 Under the hood it runs the spine for that one commit — `INGEST → STRUCTURE → EXTRACT → SNAPSHOT`. For example, an import like `from shop.billing import charge` on line 1 of `shop/orders.py` becomes an `import_edge` artifact (`import:shop.orders->shop.billing`) grounded on the exact `import` span at that `file:line@sha`, with `span_mapping: "exact"`. **"Gaps"** are files that hit a syntax error: they are *recorded*, never silently dropped, so blind spots are visible rather than invisible.
 
+### Add semantic search
+
+```bash
+uv run kb embed --db-url <postgres-url>   # separate pass: populate artifact embeddings
+```
+
+`kb embed` runs a replaceable embedding provider (sentence-transformers `all-MiniLM-L6-v2` by default, OpenAI optional via `KB_EMBED_PROVIDER=openai`) over the latest snapshot's artifacts and writes them into `artifact.embedding` (pgvector). It is idempotent and torch only loads when this command runs — never on the index path.
+
+### Serve to an AI agent (MCP)
+
+```bash
+uv run kb serve --db-url <postgres-url>   # read-only MCP server over stdio
+```
+
+The server exposes three read-only tools, each returning provenance-carrying knowledge units (extraction method + confidence + freshness):
+
+| Tool | Purpose |
+| --- | --- |
+| `find_provenance(file, line, sha?)` | What grounded knowledge sits at `file:line@sha` — the spans there and the artifacts derived from them. |
+| `get_knowledge(target, sha?, token_budget?)` | Resolve a logical key / file / module to its knowledge units, ranked and trimmed to a token budget (omissions reported, never silently truncated). |
+| `search_knowledge(query, sha?, k?, token_budget?)` | Cosine-ranked semantic search over the embedded artifacts (requires `kb embed`). |
+
+### Cross-check the API contract (eval-only)
+
+```bash
+uv run kb introspect app.main:app --repo <path>   # sandboxed app.openapi() oracle
+```
+
+`kb introspect` runs a FastAPI app in a network-blocked sandbox and emits its `openapi()` as JSON — the ground truth the Tier-1 API gate scores the **static** contract extractor against. It executes user code, so it is eval-only and never runs during indexing.
+
 ## Architecture
 
 A Python package `kb` (uv, src-layout). Modules and their responsibilities:
@@ -117,10 +172,15 @@ A Python package `kb` (uv, src-layout). Modules and their responsibilities:
 | `kb.store` | A single PostgreSQL via Alembic; content-addressed idempotent writes; the ≥ 1 `derived_from` invariant enforced in-app and by a deferred constraint trigger. |
 | `kb.git` | pygit2 ingest — reads blobs at a SHA (no checkout) — plus the diff-based invalidation seed. |
 | `kb.extract.deterministic.imports` | Deterministic import / dependency edges: tree-sitter spans grounded by line, grimp edge resolution. |
-| `kb.daemon.cli` | The `kb` CLI (`kb index`; `serve` / `introspect` are stubs for the next milestone). |
-| `kb.eval` | Five HARD CI gates (identity reproducibility, adversarial grounding, Tier-1 import oracle, Tier-4 one-hop invalidation, invariants). |
+| `kb.extract.deterministic.fastapi_contract` | Static FastAPI API-contract extractor; grounds a route across files (handler + `response_model` class), never imports user code. |
+| `kb.introspect` | Sandboxed, network-blocked `app.openapi()` oracle — eval-only ground truth for the API gate, never on the index path. |
+| `kb.mcp` | Read-only MCP server and its provenance-carrying records: `find_provenance`, `get_knowledge`, `search_knowledge`. |
+| `kb.embed` | Replaceable embedding adapters (sentence-transformers default, OpenAI optional) + snapshot population. Torch isolated behind the `embed` extra and a lazy import. |
+| `kb.rag` | The frozen pgvector RAG-over-source baseline — the "other arm" of the knowledge-vs-RAG A/B (no provenance, no grounding). |
+| `kb.daemon.cli` | The `kb` CLI: `index`, `embed`, `serve` (MCP), and `introspect` — all functional. |
+| `kb.eval` | Seven HARD CI gates (identity reproducibility, adversarial grounding, Tier-1 import oracle, Tier-1 API oracle, Tier-3 knowledge-vs-RAG recall, Tier-4 one-hop invalidation, invariants) plus the supporting MCP / embed / store suite. |
 
-Core tables: `commit_ref`, `code_span`, `span_occurrence`, `artifact`, `artifact_derived_from`, `snapshot_entry`.
+Core tables: `commit_ref`, `branch_ref`, `code_span`, `span_occurrence`, `artifact` (now with `embedding vector(384)` + `embedding_model_id`), `artifact_derived_from`, `snapshot_entry`, and `rag_chunk` (the baseline arm).
 
 ## Development
 
@@ -128,27 +188,45 @@ Core tables: `commit_ref`, `code_span`, `span_occurrence`, `artifact`, `artifact
 uv sync --extra dev            # venv + install
 uv run ruff check src/kb       # lint
 uv run mypy                    # strict type-check
-uv run pytest src/kb/eval -q   # the five HARD eval gates
+uv run pytest src/kb/eval -q   # the seven HARD eval gates
 ```
 
-CI (GitHub Actions, workflow **"CI"**, `.github/workflows/ci.yml`) runs ruff, `mypy --strict`, and the eval gates against a PostgreSQL 17 service. The **five HARD gates** that block a merge:
+CI (GitHub Actions, workflow **"CI"**, `.github/workflows/ci.yml`) runs ruff, `mypy --strict`, and the eval gates against a `pgvector/pgvector:pg17` service (with the embedding model cached). The **seven HARD gates** that block a merge:
 
 1. **Identity reproducibility** — formatting / comment / docstring / location changes must NOT change `span_id`; a rename MUST. Pure identity core, no database.
 2. **Adversarial grounding** — an ungrounded artifact is rejected by *both* layers (the app's `GroundingError` and the DB's deferred `artifact_grounded_check` trigger); a genuinely grounded artifact commits cleanly.
 3. **Tier-1 import oracle** — extracted import edges match a hand-labeled oracle, grounded on the actual import statement span; a dynamic import is asserted as a *known* gap, not a silent loss.
-4. **Tier-4 one-hop invalidation** — a content diff invalidates *exactly* the artifacts whose grounding span changed (set-equality: no over-invalidation, no stale survivors); a version bump invalidates everything.
-5. **Invariants** — zero orphans (every snapshot artifact is grounded), and re-indexing the same SHA yields the identical set of artifact ids.
+4. **Tier-1 API oracle** — the statically-extracted FastAPI contract equals the app's own `openapi()` (from the sandboxed introspect oracle), and the route's cross-file grounding (handler + `response_model`) is asserted.
+5. **Tier-3 knowledge-vs-RAG recall** — knowbase cross-file recall@k == 1.0 for every contract question (a *structural* floor: one artifact already spans both files, so it holds regardless of embedding quality); the RAG arm is reported but **never asserted**, so a model bump can't redden CI.
+6. **Tier-4 one-hop invalidation** — a content diff invalidates *exactly* the artifacts whose grounding span changed (set-equality: no over-invalidation, no stale survivors); a version bump invalidates everything.
+7. **Invariants** — zero orphans (every snapshot artifact is grounded), and re-indexing the same SHA yields the identical set of artifact ids.
 
 The identity rules in `kb.ids` (and `kb.structural`) are **LOCKED**: changing one is a breaking change, gated behind a `NORMALIZATION_VERSION` / `extractor_version` bump so existing digests are invalidated rather than silently colliding.
 
 ## Roadmap
 
-The honest north star is to show that a grounded **knowledge layer beats RAG-over-code** on real questions. Next milestones:
+The honest north star is to show that a grounded **knowledge layer beats RAG-over-code** on real questions. The reason it can is structural: to answer a cross-file contract question, RAG must independently retrieve *two* source chunks across files, while one grounded knowbase artifact already spans both — which is exactly what the Tier-3 gate measures.
 
-- [ ] **FastAPI API-contract extractor** — the first real test of the "knowledge > RAG" thesis.
-- [ ] **Read-only MCP server** — `find_provenance`, `get_knowledge`.
-- [ ] **pgvector RAG baseline + A/B** against the knowledge layer.
-- [ ] **Embeddings + semantic search** (pgvector) as a replaceable adapter.
+```mermaid
+flowchart LR
+    Q["Q: shape of GET /api/orders response?"]
+    Q --> A["api:GET /api/orders<br/>(one grounded artifact)"]
+    Q --> RAG
+    A --> H["routes.py — handler span ✓"]
+    A --> M["schemas.py — response_model span ✓"]
+    subgraph RAG["RAG-over-source — independent top-k chunks"]
+        direction TB
+        C1["chunk · routes.py ✓"]
+        C2["chunk · schemas.py — only if retrieved"]
+        C3["chunk · other.py ✗"]
+    end
+```
+
+Next milestones:
+
+- [ ] **Nightly LLM-judged A/B** (key-gated, non-gating) — grounded-answer accuracy + hallucination rate on top of recall.
+- [ ] **LLM-grounded semantic layer** — model-backed artifacts that still carry ≥ 1 span (`extraction_method = "llm_grounded"`).
+- [ ] **Incremental re-index on git push** — turn the diff-based invalidation seed into live updates.
 - [ ] **ADR mining** from git / PR history.
 - [ ] **Grounded business-process extraction.**
 - [ ] **More languages** beyond Python.
