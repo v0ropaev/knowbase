@@ -18,6 +18,7 @@ dependencies = [
     "tree-sitter-python>=0.25.0",
     "sqlparse>=0.5.5",
     "fastmcp>=3.3,<4",
+    "pgvector>=0.4,<0.5",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +32,11 @@ dev = [
     "fastapi>=0.110",
     "pytest-asyncio>=0.23",
 ]
+# Embedding backend for `kb embed` / search_knowledge / the RAG baseline. Heavy (torch) — kept out
+# of the default install so `kb index` stays light; CI uses `uv sync --extra dev --extra embed`.
+embed = [
+    "sentence-transformers>=3,<6",
+]
 
 [project.scripts]
 kb = "kb.daemon.cli:app"
@@ -41,6 +47,17 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/kb"]
+
+# Pull torch from the CPU-only wheel index: the default Linux torch wheel bundles CUDA (~2GB+),
+# which is useless here (embeddings run on CPU) and would bloat CI. macOS/linux CPU wheels both live
+# here, so this keeps local and CI consistent.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
 
 [tool.pytest.ini_options]
 testpaths = ["src/kb/eval"]
@@ -67,7 +84,10 @@ module = ["kb.eval.*"]
 ignore_errors = true
 
 [[tool.mypy.overrides]]
-module = ["pygit2.*", "grimp.*", "sqlparse.*", "fastapi.*", "starlette.*", "fastmcp.*", "mcp.*"]
+module = [
+    "pygit2.*", "grimp.*", "sqlparse.*", "fastapi.*", "starlette.*", "fastmcp.*", "mcp.*",
+    "sentence_transformers.*", "pgvector.*", "openai.*",
+]
 ignore_missing_imports = true
 
 # fastmcp's @mcp.tool decorator is untyped (the package is ignore_missing_imports above), so the

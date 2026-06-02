@@ -38,6 +38,30 @@ def index(
 
 
 @app.command()
+def embed(
+    db_url: str | None = typer.Option(None, "--db-url", help="Postgres URL (else KB_DB_URL env)."),
+    sha: str | None = typer.Option(None, "--sha", help="Snapshot sha to embed (default: latest)."),
+) -> None:
+    """Populate artifact embeddings for a snapshot (separate pass; pulls in the embedding model)."""
+    from kb.embed.population import embed_snapshot  # local imports keep torch off the index path
+    from kb.embed.providers import default_provider
+    from kb.store.queries import latest_ingested_sha
+
+    engine = make_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            target = sha or latest_ingested_sha(conn)
+        if target is None:
+            typer.echo("no snapshot to embed")
+            raise typer.Exit(code=1)
+        provider = default_provider()
+        result = embed_snapshot(engine, target, provider)
+        typer.echo(f"embedded {result.embedded} artifacts @ {target[:12]} with {provider.model_id}")
+    finally:
+        engine.dispose()
+
+
+@app.command()
 def serve(
     db_url: str | None = typer.Option(None, "--db-url", help="Postgres URL (else KB_DB_URL env)."),
 ) -> None:

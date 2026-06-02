@@ -51,3 +51,11 @@ def conn(engine: Engine) -> Iterator[Connection]:
     finally:
         transaction.rollback()
         connection.close()
+
+
+@pytest.fixture(scope="session")
+def st_provider():
+    """One local embedding model load per session (sentence-transformers; torch loads lazily)."""
+    from kb.embed.providers import SentenceTransformerProvider
+
+    return SentenceTransformerProvider()

@@ -10,12 +10,14 @@ from fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from sqlalchemy import Connection, Engine
 
+from kb.embed.providers import EmbeddingProvider, default_provider
 from kb.mcp.records import (
     ExtractionMethod,
     FindProvenanceResult,
     GetKnowledgeResult,
     KnowledgeUnit,
     Provenance,
+    SearchKnowledgeResult,
     SpanHit,
     estimate_tokens,
     summarize,
@@ -28,6 +30,14 @@ _READ_ONLY = ToolAnnotations(readOnlyHint=True)
 
 def build_server(engine: Engine) -> FastMCP:
     mcp = FastMCP(name="knowbase")
+    provider_cache: dict[str, EmbeddingProvider] = {}
+
+    def _provider() -> EmbeddingProvider:
+        # Lazy + cached: the embedding model (torch) loads only on the first search_knowledge call,
+        # so `kb serve` stays torch-free until semantic search is actually used.
+        if "p" not in provider_cache:
+            provider_cache["p"] = default_provider()
+        return provider_cache["p"]
 
     @mcp.tool(annotations=_READ_ONLY)
     def find_provenance(file: str, line: int, sha: str | None = None) -> FindProvenanceResult:
@@ -84,6 +94,42 @@ def build_server(engine: Engine) -> FastMCP:
                 used += cost
                 kept.append(unit)
             return GetKnowledgeResult(
+                sha=resolved,
+                units=kept,
+                total_matched=len(units),
+                returned=len(kept),
+                omitted=len(units) - len(kept),
+            )
+
+    @mcp.tool(annotations=_READ_ONLY)
+    def search_knowledge(
+        query: str, sha: str | None = None, k: int = 8, token_budget: int = 2000
+    ) -> SearchKnowledgeResult:
+        """Semantic search over grounded knowledge: embed ``query``, cosine-rank artifacts in the
+        snapshot, return budget-trimmed grounded units (each with provenance/method/confidence/
+        freshness). ``sha`` defaults to the latest-ingested snapshot. Requires ``kb embed`` to have
+        populated embeddings; otherwise returns empty.
+        """
+        with engine.connect() as conn:
+            resolved = sha or q.latest_ingested_sha(conn)
+            if resolved is None:
+                return SearchKnowledgeResult(
+                    sha="", units=[], total_matched=0, returned=0, omitted=0
+                )
+            [vector] = _provider().embed([query])
+            units = [
+                _unit(conn, resolved, row)
+                for row in q.similar_artifacts_by_embedding(conn, resolved, vector, k)
+            ]
+            kept: list[KnowledgeUnit] = []
+            used = 0
+            for unit in units:  # already cosine-ranked; trim to budget, never silently
+                cost = estimate_tokens(unit)
+                if kept and used + cost > token_budget:
+                    break
+                used += cost
+                kept.append(unit)
+            return SearchKnowledgeResult(
                 sha=resolved,
                 units=kept,
                 total_matched=len(units),
