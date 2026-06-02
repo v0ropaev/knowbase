@@ -1,8 +1,11 @@
 # knowbase — Design
 
-> Status: **agreed MVP design** (v0.1). This document is the source of truth for the
-> architecture. It supersedes the original free-form spec. Load-bearing decisions that are
-> expensive to change later are marked **[LOCKED]**; everything else is revisable.
+> Status: **agreed MVP design**, implemented through **v0.2**. This document is the source of truth
+> for the architecture. It supersedes the original free-form spec. Load-bearing decisions that are
+> expensive to change later are marked **[LOCKED]**; everything else is revisable. The MVP vertical
+> slice in §8 has shipped (provenance spine, import + FastAPI extractors, the sandboxed openapi oracle,
+> the read-only MCP server, pgvector embeddings/search, and the RAG A/B gate); items still labelled
+> *deferred* below remain so.
 
 ---
 
@@ -165,26 +168,48 @@ are re-pointed with zero recompute. In the MVP the DAG is **one hop** (span → 
 plain join suffices; the recursive-CTE UP-walk over `artifact_depends_on` arrives **with the
 semantic layer** (deferred).
 
+### Schema (current)
+
+Eight tables. The load-bearing edge is `artifact ||--|{ artifact_derived_from` — *one-or-more*, the
+≥ 1-grounding invariant in cardinality form. Location lives per-SHA in `span_occurrence`; `rag_chunk`
+is the deliberately separate RAG baseline arm (raw source windows, no provenance).
+
+```mermaid
+erDiagram
+    commit_ref     ||--o{ span_occurrence       : "at sha"
+    commit_ref     ||--o{ snapshot_entry         : "snapshot"
+    branch_ref     }o--|| commit_ref             : "points at"
+    code_span      ||--o{ span_occurrence        : "located per-SHA"
+    code_span      ||--o{ artifact_derived_from  : "grounds"
+    artifact       ||--|{ artifact_derived_from  : "≥1 derived_from"
+    artifact       ||--o{ snapshot_entry         : "appears in"
+    commit_ref     ||--o{ rag_chunk              : "RAG arm (no provenance)"
+```
+
+`artifact` additionally carries the derived `embedding vector(384)` + `embedding_model_id` columns
+(not part of the content-addressed `artifact_id`; recomputable from payload + model).
+
 ---
 
 ## 7. Pipeline
 
+```mermaid
+flowchart TD
+    I1["1 · INGEST<br/>repo @ SHA → commit_ref (+parents);<br/>on a new commit, diff vs prior indexed SHA"]
+    I2["2 · STRUCTURE<br/>tree-sitter → spans (per-SHA location);<br/>upsert code_span (identity) + span_occurrence"]
+    I3["3 · INVALIDATE<br/>changed span_ids → affected artifacts<br/>(one-hop join in MVP)"]
+    I4["4 · EXTRACT (deterministic, each ≥1 derived_from, confidence=1.0)<br/>(a) import/dependency graph — spine bring-up<br/>(b) API contract (FastAPI) + library surface (griffe) — thesis test"]
+    I5["5 · SNAPSHOT<br/>write snapshot_entry(sha, logical_key → artifact_id)"]
+    I6["6 · EVAL GATE<br/>deterministic tiers run in CI as HARD gates (§9)"]
+    I7["7 · SERVE<br/>read-only MCP: find_provenance / get_knowledge / search_knowledge,<br/>stamped provenance + method + confidence + freshness"]
+    EMB["EMBED (separate kb embed pass)<br/>pgvector artifact embeddings → search_knowledge"]
+    I1 --> I2 --> I3 --> I4 --> I5 --> I6 --> I7
+    I5 -. "after index" .-> EMB
+    EMB -.-> I7
 ```
-1. INGEST     repo @ SHA → commit_ref (+parents); on a new commit, diff vs prior indexed SHA.
-2. STRUCTURE  tree-sitter parses changed (or all, first time) files → spans with per-SHA
-              location; upsert code_span (identity) + span_occurrence (location).
-3. INVALIDATE (incremental) changed span_ids → affected artifacts (one-hop join in MVP).
-4. EXTRACT    deterministic extractors over affected spans:
-                (a) import/dependency graph  [spine bring-up]
-                (b) API contract (FastAPI) + library public surface (griffe)  [thesis test]
-              each artifact: ≥1 derived_from edge, is_deterministic=true, confidence=1.0.
-5. SNAPSHOT   write snapshot_entry(sha, logical_key → artifact_id).
-6. EVAL GATE  deterministic tiers run in CI as HARD gates (§9).
-7. SERVE      read-only MCP answers find_provenance / get_knowledge against the snapshot for a
-              SHA, stamping provenance + method + confidence + freshness.
 
-[deferred] SEMANTIC EXTRACT, EMBED+INDEX, recursive invalidation, ADR mining, runtime oracle.
-```
+`[deferred]` SEMANTIC EXTRACT, recursive invalidation, ADR mining. (EMBED + `search_knowledge` and the
+runtime openapi oracle shipped in v0.2; the oracle stays eval-only.)
 
 ---
 
@@ -205,8 +230,8 @@ test.)
 - Single Postgres with the `≥1 derived_from` invariant enforced at write.
 - **Adversarial fixture:** an ungrounded artifact that the write-time check **must reject** —
   so the anti-hallucination discipline is tested in the MVP, not deferred with the LLM.
-- Read-only MCP: **two tools only** — `find_provenance(file:line@sha)` and
-  `get_knowledge(target, token_budget)`.
+- Read-only MCP — `find_provenance(file:line@sha)` and `get_knowledge(target, token_budget)` (the MVP
+  pair), plus `search_knowledge(query, k, token_budget)` added in v0.2 once pgvector ranking existed.
 - Eval Tier-1 (import + API oracles) and Tier-4 (one-hop invalidation set-equality) as CI gates.
 - A frozen, documented **pgvector-RAG baseline** + a small fixed question set for the first
   honest A/B (cross-file contract questions).
@@ -265,9 +290,9 @@ this target within a token budget"), not the transport. Every response unit **al
 `provenance(file:line@sha) + extraction_method(deterministic|llm_grounded) + confidence +
 freshness(current|stale@sha)`, with a deterministic tie-break for reproducible eval.
 
-- MVP tools: `find_provenance`, `get_knowledge` (budget-trimmed, ranked).
-- Deferred: `search_knowledge` (needs eval-validated pgvector ranking), `expand_knowledge`,
-  write/mutation tools, auth/multi-tenant, async tasks, subscriptions.
+- Shipped tools: `find_provenance`, `get_knowledge` (budget-trimmed, ranked), and `search_knowledge`
+  (cosine-ranked over pgvector embeddings; added v0.2 — see §9 Tier-3).
+- Deferred: `expand_knowledge`, write/mutation tools, auth/multi-tenant, async tasks, subscriptions.
 
 > **Freshness semantics (open):** one `artifact_id` legitimately appears in many snapshots, so
 > "the unit's provenance SHA" is ambiguous. Freshness must be defined per-snapshot (or via
@@ -279,8 +304,11 @@ freshness(current|stale@sha)`, with a deterministic tie-break for reproducible e
 
 | Module | Responsibility | Key tech |
 |--------|----------------|----------|
-| `kb.structural` | Parse Python without executing it; enumerate symbols/imports/call-sites with per-SHA byte/line ranges; compute content-addressed span identity; incremental reparse. Hidden behind a `StructuralIndex`/`PathEngine` interface so a SCIP backend can replace tree-sitter later. | py-tree-sitter + tree-sitter-language-pack |
-| `kb.extract.deterministic` | No-LLM extractors → exact artifacts (confidence=1.0): import graph; FastAPI API contract; griffe library surface. | grimp, tree-sitter queries, fastapi `app.openapi()`, griffe (static) |
+| `kb.structural` | Parse Python without executing it; enumerate symbols/imports/call-sites with per-SHA byte/line ranges; compute content-addressed span identity; incremental reparse. Hidden behind a `StructuralIndex`/`PathEngine` interface so a SCIP backend can replace tree-sitter later. | tree-sitter + tree-sitter-python (canonical bindings) |
+| `kb.extract.deterministic` | No-LLM extractors → exact artifacts (confidence=1.0): import graph; FastAPI API contract (static, cross-file grounded); griffe library surface (planned). | grimp, tree-sitter queries, griffe (static) |
+| `kb.introspect` | Eval-only runtime oracle: runs a FastAPI app in a network-blocked sandbox and emits `app.openapi()` for the Tier-1 API gate. Never on the index path. | subprocess sandbox, fastapi |
+| `kb.embed` | Replaceable embedding adapters + snapshot population for `search_knowledge`. Torch isolated behind the `embed` extra and a lazy import. | sentence-transformers (default), OpenAI (optional), pgvector |
+| `kb.rag` | Frozen pgvector RAG-over-source baseline — the "other arm" of the knowledge-vs-RAG A/B (no provenance/grounding). | deterministic line-window chunker, pgvector |
 | `kb.git` | Ingest commits/branches; diff SHAs → changed byte ranges → changed span_ids. (ADR/PR mining deferred.) | pygit2 |
 | `kb.store` | Single source of truth: content-addressed spans/artifacts, provenance edges, snapshot manifests. Enforces the ≥1-derived_from invariant at write. | PostgreSQL 17, psycopg 3, SQLAlchemy Core, alembic |
 | `kb.eval` | Tiered eval; deterministic tiers gate CI. | pytest over SHA-pinned golden repos |
@@ -359,7 +387,7 @@ Review fact-checked these against current (2026) sources. Caveats are first-clas
 2. The **one** grounded business-process extractor (named real path + labeler + validator +
    deterministic sub-property gate).
 3. Recursive invalidation (`artifact_depends_on`), multi-branch dedup, freshness precompute.
-4. Embeddings + `search_knowledge`; then `pg_search`/BM25 + RRF if tsvector ranking is insufficient.
+4. Embeddings + `search_knowledge` *(shipped v0.2)*; then `pg_search`/BM25 + RRF if vector ranking is insufficient.
 5. ADR mining from git/PR history.
 6. SCIP/scip-python precise-reference backend behind `PathEngine`.
 7. Scale: GC/retention, read replicas, monorepo boundaries, runtime-oracle sandbox hardening.
