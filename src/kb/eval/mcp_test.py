@@ -51,9 +51,11 @@ def _handler_line(engine: Engine, sha: str, fq_symbol_path: str) -> int:
 
 
 async def test_get_knowledge_returns_cross_file_route(indexed: tuple[Engine, str]) -> None:
-    engine, _ = indexed
+    engine, sha = indexed
     async with Client(build_server(engine)) as client:
-        res = _data(await client.call_tool("get_knowledge", {"target": "api:GET /api/orders"}))
+        res = _data(
+            await client.call_tool("get_knowledge", {"target": "api:GET /api/orders", "sha": sha})
+        )
     unit = next(u for u in res["units"] if u["logical_key"] == "api:GET /api/orders")
     # every unit carries the trust envelope
     assert unit["extraction_method"] == "deterministic"
@@ -73,7 +75,9 @@ async def test_find_provenance_on_handler_line_returns_route(indexed: tuple[Engi
     line = _handler_line(engine, sha, "app.routes.list_orders")
     async with Client(build_server(engine)) as client:
         res = _data(
-            await client.call_tool("find_provenance", {"file": "src/app/routes.py", "line": line})
+            await client.call_tool(
+                "find_provenance", {"file": "src/app/routes.py", "line": line, "sha": sha}
+            )
         )
     units = [u for hit in res["hits"] for u in hit["knowledge"]]
     assert any(u["logical_key"] == "api:GET /api/orders" for u in units)
@@ -82,9 +86,13 @@ async def test_find_provenance_on_handler_line_returns_route(indexed: tuple[Engi
 
 
 async def test_token_budget_reports_omitted(indexed: tuple[Engine, str]) -> None:
-    engine, _ = indexed
+    engine, sha = indexed
     async with Client(build_server(engine)) as client:
-        res = _data(await client.call_tool("get_knowledge", {"target": "api:", "token_budget": 1}))
+        res = _data(
+            await client.call_tool(
+                "get_knowledge", {"target": "api:", "sha": sha, "token_budget": 1}
+            )
+        )
     assert res["total_matched"] >= 2
     assert res["omitted"] == res["total_matched"] - res["returned"]
     assert res["omitted"] > 0  # budget=1 forces trimming, reported not silent

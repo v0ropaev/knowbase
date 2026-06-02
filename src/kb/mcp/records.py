@@ -55,6 +55,14 @@ class GetKnowledgeResult(BaseModel):
     omitted: int
 
 
+class SearchKnowledgeResult(BaseModel):
+    sha: str
+    units: list[KnowledgeUnit]  # cosine-ranked
+    total_matched: int
+    returned: int
+    omitted: int
+
+
 def summarize(kind: str, payload: dict[str, Any]) -> str:
     if kind == "import_edge":
         return f"{payload.get('importer', '?')} -> {payload.get('imported', '?')}"

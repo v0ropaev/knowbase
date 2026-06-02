@@ -295,3 +295,36 @@ def units_for_logical_keys(
         )
         for r in rows
     ]
+
+
+def similar_artifacts_by_embedding(
+    conn: Connection, sha: str, query_embedding: Sequence[float], k: int
+) -> list[GroundedArtifactRow]:
+    """Top-k artifacts in ``sha``'s snapshot by cosine distance to ``query_embedding``.
+
+    ``cosine_distance`` is a pgvector comparator not in SQLAlchemy's stubs, so it's called through a
+    cast (which also binds the list as a ``vector``, unlike a raw ``op("<=>")``).
+    """
+    join = m.snapshot_entry.join(
+        m.artifact, m.artifact.c.artifact_id == m.snapshot_entry.c.artifact_id
+    )
+    distance = cast(Any, m.artifact.c.embedding).cosine_distance(list(query_embedding))
+    rows = conn.execute(
+        select(
+            m.artifact.c.logical_key,
+            m.artifact.c.kind,
+            m.artifact.c.payload,
+            m.artifact.c.is_deterministic,
+            m.artifact.c.confidence,
+        )
+        .select_from(join)
+        .where(m.snapshot_entry.c.sha == sha, m.artifact.c.embedding.is_not(None))
+        .order_by(distance)
+        .limit(k)
+    ).all()
+    return [
+        GroundedArtifactRow(
+            r.logical_key, r.kind, r.payload, r.is_deterministic, r.confidence, None
+        )
+        for r in rows
+    ]
