@@ -7,6 +7,7 @@ truth; this is a view onto it).
 
 from __future__ import annotations
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
     Column,
@@ -23,6 +24,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 
 metadata = MetaData()
+
+_EMBED_DIM = 384
 
 commit_ref = Table(
     "commit_ref",
@@ -82,6 +85,9 @@ artifact = Table(
     Column("logical_key", Text, nullable=False),
     Column("payload", JSONB, nullable=False),
     Column("created_at", DateTime(timezone=True)),
+    # derived acceleration columns (added by migration 0002); NOT part of the artifact_id key
+    Column("embedding", Vector(_EMBED_DIM)),
+    Column("embedding_model_id", Text),
 )
 
 artifact_derived_from = Table(
@@ -105,4 +111,20 @@ snapshot_entry = Table(
     Column("logical_key", Text, nullable=False),
     Column("artifact_id", LargeBinary, ForeignKey("artifact.artifact_id"), nullable=False),
     PrimaryKeyConstraint("sha", "logical_key"),
+)
+
+# The RAG-over-source baseline (added by migration 0002) — the "other arm" of the knowledge-vs-RAG
+# comparison: raw source windows with embeddings, no provenance/grounding/content-addressing.
+rag_chunk = Table(
+    "rag_chunk",
+    metadata,
+    Column("sha", Text, ForeignKey("commit_ref.sha"), nullable=False),
+    Column("file_path", Text, nullable=False),
+    Column("chunk_idx", Integer, nullable=False),
+    Column("start_line", Integer, nullable=False),
+    Column("end_line", Integer, nullable=False),
+    Column("raw_text", Text, nullable=False),
+    Column("embedding", Vector(_EMBED_DIM)),
+    Column("model_id", Text),
+    PrimaryKeyConstraint("sha", "file_path", "chunk_idx"),
 )
