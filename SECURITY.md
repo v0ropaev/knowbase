@@ -22,7 +22,7 @@ Use either of the following:
 - **GitHub private vulnerability reporting** — go to the repository's
   [Security tab](https://github.com/v0ropaev/knowbase/security/advisories) and
   choose *Report a vulnerability*. This is the preferred channel.
-- **Email** — send the details to **security@starship.pro**. If you wish to
+- **Email** — send the details to **dy.voropaev@gmail.com**. If you wish to
   encrypt the report, request our public key in your first message.
 
 A useful report includes:
