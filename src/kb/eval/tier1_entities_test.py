@@ -16,6 +16,7 @@ from kb.daemon.pipeline import index_commit
 from kb.eval._fixtures import make_git_repo
 from kb.extract.deterministic.entities import EntityExtractor
 from kb.store import models as m
+from kb.store.queries import provenance_for_artifact
 
 # A src-layout module: a pydantic model, a dataclass, a SQLAlchemy model (plus a bare declarative
 # Base that is NOT an entity), and a dynamically-built model (invisible to static parsing).
@@ -48,6 +49,15 @@ FILES = {
         "\n\n"
         'Dynamic = create_model("Dynamic", x=(int, ...))\n'
     ),
+    # A second module whose entity references one in shop/models.py (the cross-file link).
+    "src/shop/cart.py": (
+        "from dataclasses import dataclass\n"
+        "from shop.models import Order\n"
+        "\n\n"
+        "@dataclass\n"
+        "class Cart:\n"
+        "    orders: list[Order]\n"
+    ),
 }
 
 # Hand-labeled oracle: (framework, fq class). `Base` and `Dynamic` are deliberately absent.
@@ -55,11 +65,13 @@ EXPECTED_ENTITIES = {
     ("pydantic", "shop.models.Order"),
     ("dataclass", "shop.models.LineItem"),
     ("sqlalchemy", "shop.models.User"),
+    ("dataclass", "shop.cart.Cart"),
 }
 EXPECTED_FIELDS = {
     "shop.models.Order": {"id", "total", "note"},
     "shop.models.LineItem": {"sku", "qty"},
     "shop.models.User": {"id", "name", "legacy"},  # __tablename__ is metadata, not a field
+    "shop.cart.Cart": {"orders"},
 }
 KNOWN_GAP = "shop.models.Dynamic"  # create_model(): dynamic, invisible to static analysis
 
@@ -132,3 +144,17 @@ def test_entities_grounded_on_class_spans(engine: Engine, tmp_path: Path) -> Non
     for row in rows:
         assert row.span_kind == "class"
         assert row.payload["span_mapping"] == "exact"
+
+
+def test_cross_file_entity_links_grounded(engine: Engine, tmp_path: Path) -> None:
+    """`Cart` (cart.py) references `Order` (models.py) -> the artifact spans BOTH files."""
+    sha = _index(engine, tmp_path)
+    with engine.connect() as conn:
+        prov = provenance_for_artifact(conn, sha, "entity:shop.cart.Cart")
+    by_role = {(p.file_path, p.role) for p in prov}
+    assert ("src/shop/cart.py", "class_definition") in by_role
+    assert ("src/shop/models.py", "related_entity") in by_role  # cross-file grounding
+
+    cart = next(p for p in _entity_payloads(engine, sha) if p["qualified_name"] == "shop.cart.Cart")
+    related = {(r["name"], r["target_fq"], r["via"]) for r in cart["related_entities"]}
+    assert ("Order", "shop.models.Order", "field_type") in related

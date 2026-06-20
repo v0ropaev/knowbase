@@ -12,13 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Deterministic entities extractor** (`kb.extract.deterministic.entities`): a fully static
   (tree-sitter) extractor that emits one `entity` artifact per domain class — pydantic `BaseModel`,
   `@dataclass`, and SQLAlchemy declarative model — with its fields, grounded on the class-definition
-  span. Detection signals and limits are recorded in the payload (transitive bases / imperative
-  SQLAlchemy mapping are documented gaps, not silent losses); `framework_versions` (pydantic /
-  sqlalchemy) is folded into the artifact key. Surfaced via MCP `get_knowledge`/`search_knowledge`.
+  span **and, across files, on the first-party entities it references** (resolved from field-type
+  annotations and SQLAlchemy `relationship()` targets; role `related_entity`). One `entity:Order`
+  artifact then spans every file it depends on — the cross-file shape RAG-over-chunks misses.
+  Detection signals and limits are recorded in the payload (transitive bases, imperative SQLAlchemy
+  mapping, and `ForeignKey("table.col")` resolution are documented gaps, not silent losses);
+  `framework_versions` (pydantic / sqlalchemy) is folded into the artifact key. Surfaced via MCP
+  `get_knowledge`/`search_knowledge` (entity embed text enriched with field + related-entity names).
 - **Tier-1 entities gate** (`kb.eval.tier1_entities_test`): a hand-labeled HARD gate — extracted
   entities + fields match the oracle, a bare declarative `Base` is not an entity, a `create_model(...)`
-  model is asserted as a known gap, and every entity is grounded on a `class` span. Brings the headline
-  HARD gates to **eight**.
+  model is asserted as a known gap, every entity is grounded on a `class` span, and a cross-file
+  reference (`Cart` → `Order`) is grounded on both files. Brings the headline HARD gates to **eight**.
+- **Tier-3 entity questions** (`kb.eval.questions`): the knowledge-vs-RAG A/B now also covers domain
+  entities (a two-file `Order`/`LineItem` fixture), asserting knowbase cross-file recall@k == 1.0 for
+  entity questions as well as API-contract questions.
 
 ## [0.2.0] - 2026-06-02
 

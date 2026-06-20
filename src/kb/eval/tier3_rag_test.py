@@ -15,8 +15,9 @@ from sqlalchemy import Engine, text
 from kb.daemon.pipeline import index_commit
 from kb.embed.population import embed_snapshot
 from kb.eval._fixtures import make_git_repo
-from kb.eval.questions import QUESTIONS
+from kb.eval.questions import ENTITY_FILES, QUESTIONS
 from kb.eval.tier1_api_test import FILES
+from kb.extract.deterministic.entities import EntityExtractor
 from kb.extract.deterministic.fastapi_contract import FastAPIExtractor
 from kb.rag.baseline import index_rag_baseline, rag_retrieve
 from kb.store import queries as q
@@ -28,8 +29,14 @@ K = 5
 @pytest.fixture(scope="module")
 def prepared(engine: Engine, tmp_path_factory, st_provider) -> tuple[Engine, str]:
     repo = tmp_path_factory.mktemp("tier3")
-    sha = make_git_repo(repo, [FILES])[0]
-    index_commit(engine, str(repo), sha, extractors=[FastAPIExtractor()], first_party_root="src")
+    sha = make_git_repo(repo, [{**FILES, **ENTITY_FILES}])[0]
+    index_commit(
+        engine,
+        str(repo),
+        sha,
+        extractors=[FastAPIExtractor(), EntityExtractor()],
+        first_party_root="src",
+    )
     embed_snapshot(engine, sha, st_provider)
     index_rag_baseline(engine, str(repo), sha, st_provider)
     return engine, sha
