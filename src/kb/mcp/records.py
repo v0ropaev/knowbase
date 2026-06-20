@@ -69,6 +69,10 @@ def summarize(kind: str, payload: dict[str, Any]) -> str:
     if kind == "api_route":
         model = payload.get("response_model_base") or "?"
         return f"{payload.get('method', '?')} {payload.get('path', '?')} -> {model}"
+    if kind == "entity":
+        framework = payload.get("framework", "?")
+        n_fields = len(payload.get("fields", []))
+        return f"{payload.get('qualified_name', '?')} ({framework}, {n_fields} fields)"
     return kind
 
 

@@ -9,7 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- (nothing yet)
+- **Deterministic entities extractor** (`kb.extract.deterministic.entities`): a fully static
+  (tree-sitter) extractor that emits one `entity` artifact per domain class — pydantic `BaseModel`,
+  `@dataclass`, and SQLAlchemy declarative model — with its fields, grounded on the class-definition
+  span. Detection signals and limits are recorded in the payload (transitive bases / imperative
+  SQLAlchemy mapping are documented gaps, not silent losses); `framework_versions` (pydantic /
+  sqlalchemy) is folded into the artifact key. Surfaced via MCP `get_knowledge`/`search_knowledge`.
+- **Tier-1 entities gate** (`kb.eval.tier1_entities_test`): a hand-labeled HARD gate — extracted
+  entities + fields match the oracle, a bare declarative `Base` is not an entity, a `create_model(...)`
+  model is asserted as a known gap, and every entity is grounded on a `class` span. Brings the headline
+  HARD gates to **eight**.
 
 ## [0.2.0] - 2026-06-02
 

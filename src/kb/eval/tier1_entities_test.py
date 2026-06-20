@@ -1,0 +1,134 @@
+"""HARD GATE — Tier 1: domain entities vs a hand-labeled oracle (DESIGN.md §4, §9).
+
+The hand-labeled ``EXPECTED_ENTITIES`` / ``EXPECTED_FIELDS`` are the real oracle (importing the
+models to introspect them would execute user code). A bare declarative ``Base`` must NOT be an
+entity, and a dynamically-built model (``create_model``) is a deliberate static-analysis blind spot,
+asserted as a KNOWN gap — not a silent loss. Every entity is grounded on its class-definition span.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from sqlalchemy import Engine, select
+
+from kb.daemon.pipeline import index_commit
+from kb.eval._fixtures import make_git_repo
+from kb.extract.deterministic.entities import EntityExtractor
+from kb.store import models as m
+
+# A src-layout module: a pydantic model, a dataclass, a SQLAlchemy model (plus a bare declarative
+# Base that is NOT an entity), and a dynamically-built model (invisible to static parsing).
+FILES = {
+    "src/shop/__init__.py": "",
+    "src/shop/models.py": (
+        "from dataclasses import dataclass\n"
+        "from pydantic import BaseModel, create_model\n"
+        "from sqlalchemy import Column, Integer\n"
+        "from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column\n"
+        "\n\n"
+        "class Order(BaseModel):\n"
+        "    id: int\n"
+        "    total: float = 0.0\n"
+        "    note: str | None = None\n"
+        "\n\n"
+        "@dataclass\n"
+        "class LineItem:\n"
+        "    sku: str\n"
+        "    qty: int = 1\n"
+        "\n\n"
+        "class Base(DeclarativeBase):\n"
+        "    pass\n"
+        "\n\n"
+        "class User(Base):\n"
+        '    __tablename__ = "users"\n'
+        "    id: Mapped[int] = mapped_column(primary_key=True)\n"
+        "    name: Mapped[str] = mapped_column()\n"
+        "    legacy = Column(Integer)\n"
+        "\n\n"
+        'Dynamic = create_model("Dynamic", x=(int, ...))\n'
+    ),
+}
+
+# Hand-labeled oracle: (framework, fq class). `Base` and `Dynamic` are deliberately absent.
+EXPECTED_ENTITIES = {
+    ("pydantic", "shop.models.Order"),
+    ("dataclass", "shop.models.LineItem"),
+    ("sqlalchemy", "shop.models.User"),
+}
+EXPECTED_FIELDS = {
+    "shop.models.Order": {"id", "total", "note"},
+    "shop.models.LineItem": {"sku", "qty"},
+    "shop.models.User": {"id", "name", "legacy"},  # __tablename__ is metadata, not a field
+}
+KNOWN_GAP = "shop.models.Dynamic"  # create_model(): dynamic, invisible to static analysis
+
+
+def _index(engine: Engine, tmp_path: Path) -> str:
+    sha = make_git_repo(tmp_path, [FILES])[0]
+    index_commit(engine, str(tmp_path), sha, extractors=[EntityExtractor()], first_party_root="src")
+    return sha
+
+
+def _entity_payloads(engine: Engine, sha: str) -> list[dict]:
+    join = m.snapshot_entry.join(
+        m.artifact, m.artifact.c.artifact_id == m.snapshot_entry.c.artifact_id
+    )
+    with engine.connect() as conn:
+        return list(
+            conn.execute(
+                select(m.artifact.c.payload)
+                .select_from(join)
+                .where(m.snapshot_entry.c.sha == sha, m.artifact.c.kind == "entity")
+            ).scalars()
+        )
+
+
+def test_entities_match_oracle(engine: Engine, tmp_path: Path) -> None:
+    sha = _index(engine, tmp_path)
+    found = {(p["framework"], p["qualified_name"]) for p in _entity_payloads(engine, sha)}
+    assert found == EXPECTED_ENTITIES
+
+
+def test_fields_match_oracle(engine: Engine, tmp_path: Path) -> None:
+    sha = _index(engine, tmp_path)
+    by_key = {p["qualified_name"]: p for p in _entity_payloads(engine, sha)}
+    for qualified_name, expected in EXPECTED_FIELDS.items():
+        names = {f["name"] for f in by_key[qualified_name]["fields"]}
+        assert names == expected, qualified_name
+
+
+def test_bare_declarative_base_is_not_an_entity(engine: Engine, tmp_path: Path) -> None:
+    sha = _index(engine, tmp_path)
+    keys = {p["qualified_name"] for p in _entity_payloads(engine, sha)}
+    assert "shop.models.Base" not in keys  # no __tablename__, no columns -> not a domain entity
+
+
+def test_dynamic_model_is_a_known_gap(engine: Engine, tmp_path: Path) -> None:
+    sha = _index(engine, tmp_path)
+    keys = {p["qualified_name"] for p in _entity_payloads(engine, sha)}
+    assert KNOWN_GAP not in keys  # documented blind spot, surfaced — not silently "found"
+
+
+def test_entities_grounded_on_class_spans(engine: Engine, tmp_path: Path) -> None:
+    sha = _index(engine, tmp_path)
+    join = (
+        m.snapshot_entry.join(
+            m.artifact, m.artifact.c.artifact_id == m.snapshot_entry.c.artifact_id
+        )
+        .join(
+            m.artifact_derived_from,
+            m.artifact_derived_from.c.artifact_id == m.artifact.c.artifact_id,
+        )
+        .join(m.code_span, m.code_span.c.span_id == m.artifact_derived_from.c.span_id)
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(m.artifact.c.payload, m.code_span.c.span_kind)
+            .select_from(join)
+            .where(m.snapshot_entry.c.sha == sha, m.artifact.c.kind == "entity")
+        ).all()
+    assert rows  # every entity is grounded (>=1 derived_from)
+    for row in rows:
+        assert row.span_kind == "class"
+        assert row.payload["span_mapping"] == "exact"

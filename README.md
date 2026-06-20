@@ -83,12 +83,12 @@ flowchart LR
 **v0.2 — spine + the first knowledge extractors, MCP serving, and the knowledge-vs-RAG gate.** Everything here grounds what it claims, and nothing it cannot:
 
 - **Provenance spine** — content-addressed `span_id` (LOCKED); tree-sitter spans with a normalized S-expression fingerprint and per-SHA location; a single-Postgres, Alembic-managed store with content-addressed idempotent writes; the ≥ 1 `derived_from` anti-hallucination invariant enforced in-app *and* by a deferred DB trigger; pygit2 git ingest (no checkout) with a diff-based invalidation seed.
-- **Deterministic extractors** — the **import / dependency graph** (grimp resolves the edge, tree-sitter grounds it on the exact import statement, with an honest `approximate` fallback for re-exports / relative / unmappable imports — never a silent loss), and the **FastAPI API-contract** extractor, which grounds a single route **across files** (handler in `routes.py` + `response_model` class in `schemas.py`).
+- **Deterministic extractors** — the **import / dependency graph** (grimp resolves the edge, tree-sitter grounds it on the exact import statement, with an honest `approximate` fallback for re-exports / relative / unmappable imports — never a silent loss); the **FastAPI API-contract** extractor, which grounds a single route **across files** (handler in `routes.py` + `response_model` class in `schemas.py`); and the **domain-entity** extractor (pydantic / dataclass / SQLAlchemy classes and their fields, grounded on the class definition — purely static, with documented detection limits).
 - **`kb introspect`** — a sandboxed, network-blocked `app.openapi()` oracle, eval-only and never on the index path, that the API gate scores the static contract against.
 - **Read-only MCP server** — `find_provenance`, `get_knowledge`, and `search_knowledge`, each returning provenance-carrying units (method + confidence + freshness).
 - **pgvector embeddings + semantic search** — a replaceable embedding provider (sentence-transformers by default, OpenAI optional) populated by a separate `kb embed` pass; torch stays out of the index path.
 - **A frozen RAG-over-source baseline** and the **Tier-3 knowledge-vs-RAG recall gate** — the honest A/B that backs the "knowledge > RAG" thesis.
-- **Seven HARD CI eval gates** (see [Development](#development)).
+- **Eight HARD CI eval gates** (see [Development](#development)).
 
 **Not done yet** (and deliberately not faked): the semantic / **LLM-grounded** extraction layer, the nightly LLM-judged A/B, ADR mining from git history, grounded business-process extraction, incremental re-index on git push, and languages beyond Python. See the [Roadmap](#roadmap).
 
@@ -112,7 +112,7 @@ The base `--extra dev` install stays torch-free; the `embed` extra pulls sentenc
 ### Run the gates
 
 ```bash
-uv run pytest src/kb/eval -q   # the seven HARD gates (spins an ephemeral local Postgres)
+uv run pytest src/kb/eval -q   # the eight HARD gates (spins an ephemeral local Postgres)
 ```
 
 ### Index a commit
@@ -173,12 +173,13 @@ A Python package `kb` (uv, src-layout). Modules and their responsibilities:
 | `kb.git` | pygit2 ingest — reads blobs at a SHA (no checkout) — plus the diff-based invalidation seed. |
 | `kb.extract.deterministic.imports` | Deterministic import / dependency edges: tree-sitter spans grounded by line, grimp edge resolution. |
 | `kb.extract.deterministic.fastapi_contract` | Static FastAPI API-contract extractor; grounds a route across files (handler + `response_model` class), never imports user code. |
+| `kb.extract.deterministic.entities` | Static domain-entity extractor — pydantic / dataclass / SQLAlchemy classes + their fields, grounded on the class definition; detection signals and limits recorded in the payload. |
 | `kb.introspect` | Sandboxed, network-blocked `app.openapi()` oracle — eval-only ground truth for the API gate, never on the index path. |
 | `kb.mcp` | Read-only MCP server and its provenance-carrying records: `find_provenance`, `get_knowledge`, `search_knowledge`. |
 | `kb.embed` | Replaceable embedding adapters (sentence-transformers default, OpenAI optional) + snapshot population. Torch isolated behind the `embed` extra and a lazy import. |
 | `kb.rag` | The frozen pgvector RAG-over-source baseline — the "other arm" of the knowledge-vs-RAG A/B (no provenance, no grounding). |
 | `kb.daemon.cli` | The `kb` CLI: `index`, `embed`, `serve` (MCP), and `introspect` — all functional. |
-| `kb.eval` | Seven HARD CI gates (identity reproducibility, adversarial grounding, Tier-1 import oracle, Tier-1 API oracle, Tier-3 knowledge-vs-RAG recall, Tier-4 one-hop invalidation, invariants) plus the supporting MCP / embed / store suite. |
+| `kb.eval` | Eight HARD CI gates (identity reproducibility, adversarial grounding, Tier-1 import oracle, Tier-1 API oracle, Tier-1 entities oracle, Tier-3 knowledge-vs-RAG recall, Tier-4 one-hop invalidation, invariants) plus the supporting MCP / embed / store suite. |
 
 Core tables: `commit_ref`, `branch_ref`, `code_span`, `span_occurrence`, `artifact` (now with `embedding vector(384)` + `embedding_model_id`), `artifact_derived_from`, `snapshot_entry`, and `rag_chunk` (the baseline arm).
 
@@ -188,18 +189,19 @@ Core tables: `commit_ref`, `branch_ref`, `code_span`, `span_occurrence`, `artifa
 uv sync --extra dev            # venv + install
 uv run ruff check src/kb       # lint
 uv run mypy                    # strict type-check
-uv run pytest src/kb/eval -q   # the seven HARD eval gates
+uv run pytest src/kb/eval -q   # the eight HARD eval gates
 ```
 
-CI (GitHub Actions, workflow **"CI"**, `.github/workflows/ci.yml`) runs ruff, `mypy --strict`, and the eval gates against a `pgvector/pgvector:pg17` service (with the embedding model cached). The **seven HARD gates** that block a merge:
+CI (GitHub Actions, workflow **"CI"**, `.github/workflows/ci.yml`) runs ruff, `mypy --strict`, and the eval gates against a `pgvector/pgvector:pg17` service (with the embedding model cached). The **eight HARD gates** that block a merge:
 
 1. **Identity reproducibility** — formatting / comment / docstring / location changes must NOT change `span_id`; a rename MUST. Pure identity core, no database.
 2. **Adversarial grounding** — an ungrounded artifact is rejected by *both* layers (the app's `GroundingError` and the DB's deferred `artifact_grounded_check` trigger); a genuinely grounded artifact commits cleanly.
 3. **Tier-1 import oracle** — extracted import edges match a hand-labeled oracle, grounded on the actual import statement span; a dynamic import is asserted as a *known* gap, not a silent loss.
 4. **Tier-1 API oracle** — the statically-extracted FastAPI contract equals the app's own `openapi()` (from the sandboxed introspect oracle), and the route's cross-file grounding (handler + `response_model`) is asserted.
-5. **Tier-3 knowledge-vs-RAG recall** — knowbase cross-file recall@k == 1.0 for every contract question (a *structural* floor: one artifact already spans both files, so it holds regardless of embedding quality); the RAG arm is reported but **never asserted**, so a model bump can't redden CI.
-6. **Tier-4 one-hop invalidation** — a content diff invalidates *exactly* the artifacts whose grounding span changed (set-equality: no over-invalidation, no stale survivors); a version bump invalidates everything.
-7. **Invariants** — zero orphans (every snapshot artifact is grounded), and re-indexing the same SHA yields the identical set of artifact ids.
+5. **Tier-1 entities oracle** — extracted pydantic / dataclass / SQLAlchemy entities + their fields match a hand-labeled oracle, each grounded on its class span; a bare declarative `Base` is correctly *not* an entity and a `create_model(...)` model is asserted as a *known* gap.
+6. **Tier-3 knowledge-vs-RAG recall** — knowbase cross-file recall@k == 1.0 for every contract question (a *structural* floor: one artifact already spans both files, so it holds regardless of embedding quality); the RAG arm is reported but **never asserted**, so a model bump can't redden CI.
+7. **Tier-4 one-hop invalidation** — a content diff invalidates *exactly* the artifacts whose grounding span changed (set-equality: no over-invalidation, no stale survivors); a version bump invalidates everything.
+8. **Invariants** — zero orphans (every snapshot artifact is grounded), and re-indexing the same SHA yields the identical set of artifact ids.
 
 The identity rules in `kb.ids` (and `kb.structural`) are **LOCKED**: changing one is a breaking change, gated behind a `NORMALIZATION_VERSION` / `extractor_version` bump so existing digests are invalidated rather than silently colliding.
 

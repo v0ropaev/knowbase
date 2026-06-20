@@ -11,6 +11,7 @@ import json
 import typer
 
 from kb.daemon.pipeline import index_commit
+from kb.extract.deterministic.entities import EntityExtractor
 from kb.extract.deterministic.fastapi_contract import FastAPIExtractor
 from kb.extract.deterministic.imports import ImportExtractor
 from kb.introspect import introspect_app
@@ -27,7 +28,9 @@ def index(
 ) -> None:
     """Index one commit: ingest, parse spans, run deterministic extractors, write the snapshot."""
     engine = make_engine(db_url)
-    result = index_commit(engine, repo, sha, extractors=[ImportExtractor(), FastAPIExtractor()])
+    result = index_commit(
+        engine, repo, sha, extractors=[ImportExtractor(), FastAPIExtractor(), EntityExtractor()]
+    )
     engine.dispose()
     typer.echo(
         f"indexed {result.sha[:12]}: {result.files_indexed} files, {result.spans} spans, "
