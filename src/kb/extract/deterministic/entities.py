@@ -1,8 +1,13 @@
 """Deterministic domain-entity extractor — pydantic / dataclass / SQLAlchemy (DESIGN.md §4, §14).
 
 Produces one ``entity`` artifact per domain class, grounded on that class's span (role
-``class_definition``). Fully static: re-parses each class span's source with tree-sitter (the same
-discipline as the FastAPI contract extractor); it never imports or executes user code.
+``class_definition``) AND — across files — on the class spans of the **first-party entities it
+references** (role ``related_entity``), resolved from field-type annotations and SQLAlchemy
+``relationship(...)`` targets. That cross-file link is what RAG-over-chunks misses (mirrors how the
+FastAPI extractor grounds a route on its handler + ``response_model``).
+
+Fully static: re-parses each class span's source with tree-sitter (same discipline as the FastAPI
+contract extractor); it never imports or executes user code.
 
 Detection is best-effort and the signals are recorded in the payload (never a silent guess):
   * **dataclass**   — a decorator whose dotted name ends in ``dataclass``.
@@ -16,6 +21,7 @@ into the artifact key, since field interpretation can shift across major version
 
 from __future__ import annotations
 
+import re
 import textwrap
 import tomllib
 from collections.abc import Sequence
@@ -30,13 +36,14 @@ from kb.extract.base import DerivedEdge, ExtractContext, ExtractedArtifact
 from kb.structural.interface import ParsedSpan
 
 EXTRACTOR_ID = "entities"
-EXTRACTOR_VERSION = "1"
+EXTRACTOR_VERSION = "2"  # v2: cross-file related_entity grounding (was v1: class span only)
 
 _LANGUAGE = Language(tsp.language())
 _PYDANTIC_BASES = frozenset({"BaseModel", "BaseSettings"})
 _SA_COLUMN_CALLS = frozenset({"Column", "mapped_column"})
 _OPTIONAL_MARKERS = ("Optional[", "| None", "None |")
 _VERSIONED = ("pydantic", "sqlalchemy")
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 @dataclass(frozen=True)
@@ -56,19 +63,22 @@ class EntityExtractor:
 
     def extract(self, ctx: ExtractContext) -> list[ExtractedArtifact]:
         versions = _framework_versions(ctx, _VERSIONED)
-        artifacts: list[ExtractedArtifact] = []
+        # Pass 1: parse every class into an entity record; index by short name (cross-file lookup).
+        parsed: list[_ParsedClass] = []
         for module, spans in ctx.spans_by_module.items():
             for span in spans:
                 if span.span_kind != "class":
                     continue
-                art = self._build_artifact(module, span, versions)
-                if art is not None:
-                    artifacts.append(art)
-        return artifacts
+                pc = self._parse_class(module, span)
+                if pc is not None:
+                    parsed.append(pc)
+        index: dict[str, list[_ParsedClass]] = {}
+        for pc in parsed:
+            index.setdefault(_basename(pc.span.fq_symbol_path), []).append(pc)
+        # Pass 2: build artifacts, grounding each entity on the spans of the entities it refers to.
+        return [self._build_artifact(pc, index, versions) for pc in parsed]
 
-    def _build_artifact(
-        self, module: str, span: ParsedSpan, versions: dict[str, str]
-    ) -> ExtractedArtifact | None:
+    def _parse_class(self, module: str, span: ParsedSpan) -> _ParsedClass | None:
         root = self._parser.parse(textwrap.dedent(span.raw_text).encode("utf-8")).root_node
         deco = _first_child_of_type(root, "decorated_definition")
         cls = (
@@ -78,23 +88,45 @@ class EntityExtractor:
         )
         if cls is None:
             return None
-
         decorators = _decorator_names(deco) if deco is not None else []
         bases = _base_names(cls)
         body = cls.child_by_field_name("body")
         tablename, raw_fields, relationships = _parse_body(body)
-
         framework, signals, limitations = _classify(decorators, bases, tablename, raw_fields)
         if framework is None:
             return None
+        return _ParsedClass(
+            module=module,
+            span=span,
+            framework=framework,
+            fields=_select_fields(framework, raw_fields),
+            relationships=relationships,
+            tablename=tablename,
+            bases=bases,
+            signals=signals,
+            limitations=limitations,
+        )
 
-        fields = _select_fields(framework, raw_fields)
+    def _build_artifact(
+        self,
+        pc: _ParsedClass,
+        index: dict[str, list[_ParsedClass]],
+        versions: dict[str, str],
+    ) -> ExtractedArtifact:
+        grounding: dict[bytes, DerivedEdge] = {
+            pc.span.span_id: DerivedEdge(pc.span.span_id, "class_definition")
+        }
+        related = _resolve_related(pc, index)
+        for r in related:
+            sid: bytes = r["span_id"]
+            grounding.setdefault(sid, DerivedEdge(sid, "related_entity"))
+
         payload: dict[str, Any] = {
-            "framework": framework,
-            "class_name": span.fq_symbol_path.rsplit(".", 1)[-1],
-            "qualified_name": span.fq_symbol_path,
-            "module": module,
-            "bases": bases,
+            "framework": pc.framework,
+            "class_name": _basename(pc.span.fq_symbol_path),
+            "qualified_name": pc.span.fq_symbol_path,
+            "module": pc.module,
+            "bases": pc.bases,
             "fields": [
                 {
                     "name": f.name,
@@ -103,22 +135,27 @@ class EntityExtractor:
                     "required": f.required,
                     "source": f.source,
                 }
-                for f in fields
+                for f in pc.fields
             ],
-            "tablename": tablename,
-            "relationships": relationships,
-            "detection_signals": signals,
+            "tablename": pc.tablename,
+            "relationships": pc.relationships,
+            "related_entities": [
+                {k: v for k, v in r.items() if k != "span_id"} for r in related
+            ],
+            "detection_signals": pc.signals,
             "span_mapping": "exact",
-            "limitations": limitations,
+            "limitations": pc.limitations,
         }
         framework_versions = (
-            {} if framework == "dataclass" else {framework: versions.get(framework, "unknown")}
+            {}
+            if pc.framework == "dataclass"
+            else {pc.framework: versions.get(pc.framework, "unknown")}
         )
         return ExtractedArtifact(
             kind="entity",
-            logical_key=f"entity:{span.fq_symbol_path}",
+            logical_key=f"entity:{pc.span.fq_symbol_path}",
             payload=payload,
-            derived_from=[DerivedEdge(span.span_id, "class_definition")],
+            derived_from=list(grounding.values()),
             extractor_id=self.extractor_id,
             extractor_version=self.extractor_version,
             framework_versions=framework_versions,
@@ -135,6 +172,69 @@ class _Field:
     has_default: bool
     required: bool
     source: str  # "annotated" | "column"
+
+
+@dataclass
+class _ParsedClass:
+    """A classified entity from pass 1, carrying everything pass 2 needs to ground cross-file."""
+
+    module: str
+    span: ParsedSpan
+    framework: str
+    fields: list[_Field]
+    relationships: list[dict[str, str | None]]
+    tablename: str | None
+    bases: list[str]
+    signals: list[str]
+    limitations: list[str]
+
+
+def _resolve_related(
+    pc: _ParsedClass, index: dict[str, list[_ParsedClass]]
+) -> list[dict[str, Any]]:
+    """Resolve ``pc``'s field-type and ``relationship()`` references to first-party entity classes.
+
+    Each resolved target becomes a ``related_entity`` grounding edge (cross-file when it lives in
+    another module). Self-references and non-entity types are dropped; the raw ``relationships``
+    stay in the payload so unresolved/external targets remain visible.
+    """
+    refs: list[tuple[str, str]] = []  # (short name, via)
+    for field in pc.fields:
+        if field.annotation:
+            for token in _IDENT.findall(field.annotation):
+                if token in index:
+                    refs.append((token, "field_type"))
+    for rel in pc.relationships:
+        target = rel.get("target")
+        if target:
+            name = _basename(target.strip("\"'"))
+            if name in index:
+                refs.append((name, "relationship"))
+
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for name, via in refs:
+        matches = [t for t in index[name] if t.span.span_id != pc.span.span_id]
+        ambiguous = len({t.span.fq_symbol_path for t in matches}) > 1
+        for tgt in matches:
+            if tgt.span.fq_symbol_path in seen:
+                continue
+            seen.add(tgt.span.fq_symbol_path)
+            out.append(
+                {
+                    "name": name,
+                    "via": via,
+                    "target_fq": tgt.span.fq_symbol_path,
+                    "target_module": tgt.module,
+                    "ambiguous": ambiguous,
+                    "span_id": tgt.span.span_id,
+                }
+            )
+    return out
+
+
+def _basename(fq: str) -> str:
+    return fq.rsplit(".", 1)[-1]
 
 
 def _select_fields(framework: str, raw: Sequence[_RawField]) -> list[_Field]:

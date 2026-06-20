@@ -25,4 +25,14 @@ def embed_text(kind: str, payload: dict[str, Any]) -> str:
         return " ".join(p for p in parts if p.strip())
     if kind == "import_edge":
         return f"{head} import {payload.get('importer', '')} {payload.get('imported', '')}"
+    if kind == "entity":
+        parts = [
+            head,
+            f"entity {payload.get('qualified_name', '')}",
+            f"framework {payload.get('framework', '')}",
+            "fields " + " ".join(str(f.get("name", "")) for f in payload.get("fields", [])),
+            "related "
+            + " ".join(str(r.get("name", "")) for r in payload.get("related_entities", [])),
+        ]
+        return " ".join(p for p in parts if p.strip())
     return head
