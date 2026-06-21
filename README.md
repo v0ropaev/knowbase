@@ -89,7 +89,8 @@ flowchart LR
 - **Read-only MCP server** — `find_provenance`, `get_knowledge`, and `search_knowledge`, each returning provenance-carrying units (method + confidence + freshness).
 - **pgvector embeddings + semantic search** — a replaceable embedding provider (sentence-transformers by default, OpenAI optional) populated by a separate `kb embed` pass; torch stays out of the index path.
 - **A frozen RAG-over-source baseline** and the **Tier-3 knowledge-vs-RAG recall gate** — the honest A/B that backs the "knowledge > RAG" thesis.
-- **Eight HARD CI eval gates** (see [Development](#development)).
+- **LLM-grounded descriptions** — an optional, key-gated `kb describe` pass has an LLM write NL summaries for routes/entities; every claim is validated against the artifact's own spans by a deterministic sub-property gate, so ungrounded claims are *dropped* (the anti-hallucination invariant, with a model in the loop). Stored as `extraction_method = "llm_grounded"`, grounded on the same spans.
+- **Nine HARD CI eval gates** (see [Development](#development)).
 
 - **A nightly LLM-judged A/B** (optional, key-gated, **non-gating**) — an answerer LLM answers each question from knowbase's grounded context vs a RAG-over-source context, and a judge LLM scores **answer accuracy** (against hand-written gold) + **hallucination**. Tracked metrics on top of recall; it never blocks CI.
 
@@ -115,7 +116,7 @@ The base `--extra dev` install stays torch-free; the `embed` extra pulls sentenc
 ### Run the gates
 
 ```bash
-uv run pytest src/kb/eval -q   # the eight HARD gates (spins an ephemeral local Postgres)
+uv run pytest src/kb/eval -q   # the nine HARD gates (spins an ephemeral local Postgres)
 ```
 
 ### Index a commit
@@ -141,6 +142,14 @@ uv run kb embed --db-url <postgres-url>   # separate pass: populate artifact emb
 ```
 
 `kb embed` runs a replaceable embedding provider (sentence-transformers `all-MiniLM-L6-v2` by default, OpenAI optional via `KB_EMBED_PROVIDER=openai`) over the latest snapshot's artifacts and writes them into `artifact.embedding` (pgvector). It is idempotent and torch only loads when this command runs — never on the index path.
+
+### Generate semantic descriptions (LLM-grounded)
+
+```bash
+uv run kb describe --db-url <postgres-url>   # separate, key-gated pass (ANTHROPIC_API_KEY / OPENAI_API_KEY)
+```
+
+`kb describe` has an LLM (via `kb.llm`, `KB_LLM_PROVIDER` in {`anthropic`,`openai`}) write a short NL summary + structured claims for each route/entity in the latest snapshot. **Every claim is validated against that artifact's own grounding spans** — claims citing a symbol not in the code are dropped, and a `description` artifact is stored only if something survives, grounded on the same spans (`extraction_method = "llm_grounded"`). It needs an API key, never runs on `kb index`, and the deterministic grounding gate is exercised in CI without a key (stub LLM).
 
 ### Serve to an AI agent (MCP)
 
@@ -209,8 +218,9 @@ A Python package `kb` (uv, src-layout). Modules and their responsibilities:
 | `kb.mcp` | Read-only MCP server and its provenance-carrying records: `find_provenance`, `get_knowledge`, `search_knowledge`. |
 | `kb.embed` | Replaceable embedding adapters (sentence-transformers default, OpenAI optional) + snapshot population. Torch isolated behind the `embed` extra and a lazy import. |
 | `kb.rag` | The frozen pgvector RAG-over-source baseline — the "other arm" of the knowledge-vs-RAG A/B (no provenance, no grounding). |
-| `kb.daemon.cli` | The `kb` CLI: `index`, `migrate`, `embed`, `serve` (MCP), and `introspect` — all functional. |
-| `kb.eval` | Eight HARD CI gates (identity reproducibility, adversarial grounding, Tier-1 import oracle, Tier-1 API oracle, Tier-1 entities oracle, Tier-3 knowledge-vs-RAG recall, Tier-4 one-hop invalidation, invariants) plus the supporting MCP / embed / store suite. |
+| `kb.extract.semantic` | LLM-grounded extraction (`kb describe`): NL descriptions of routes/entities with a deterministic sub-property gate (`grounding.validate_claims`) that drops any claim not backed by the artifact's spans. Separate key-gated pass; never on `index`. |
+| `kb.daemon.cli` | The `kb` CLI: `index`, `migrate`, `embed`, `describe`, `serve` (MCP), and `introspect` — all functional. |
+| `kb.eval` | Nine HARD CI gates (identity reproducibility, adversarial grounding, Tier-1 import oracle, Tier-1 API oracle, Tier-1 entities oracle, Tier-3 knowledge-vs-RAG recall, Tier-4 one-hop invalidation, invariants, semantic grounding floor) plus the supporting MCP / embed / store suite. |
 
 Core tables: `commit_ref`, `branch_ref`, `code_span`, `span_occurrence`, `artifact` (now with `embedding vector(384)` + `embedding_model_id`), `artifact_derived_from`, `snapshot_entry`, and `rag_chunk` (the baseline arm).
 
@@ -220,10 +230,10 @@ Core tables: `commit_ref`, `branch_ref`, `code_span`, `span_occurrence`, `artifa
 uv sync --extra dev            # venv + install
 uv run ruff check src/kb       # lint
 uv run mypy                    # strict type-check
-uv run pytest src/kb/eval -q   # the eight HARD eval gates
+uv run pytest src/kb/eval -q   # the nine HARD eval gates
 ```
 
-CI (GitHub Actions, workflow **"CI"**, `.github/workflows/ci.yml`) runs ruff, `mypy --strict`, and the eval gates against a `pgvector/pgvector:pg17` service (with the embedding model cached). The **eight HARD gates** that block a merge:
+CI (GitHub Actions, workflow **"CI"**, `.github/workflows/ci.yml`) runs ruff, `mypy --strict`, and the eval gates against a `pgvector/pgvector:pg17` service (with the embedding model cached). The **nine HARD gates** that block a merge:
 
 1. **Identity reproducibility** — formatting / comment / docstring / location changes must NOT change `span_id`; a rename MUST. Pure identity core, no database.
 2. **Adversarial grounding** — an ungrounded artifact is rejected by *both* layers (the app's `GroundingError` and the DB's deferred `artifact_grounded_check` trigger); a genuinely grounded artifact commits cleanly.
@@ -233,6 +243,7 @@ CI (GitHub Actions, workflow **"CI"**, `.github/workflows/ci.yml`) runs ruff, `m
 6. **Tier-3 knowledge-vs-RAG recall** — knowbase cross-file recall@k == 1.0 for every cross-file question (API contracts **and** domain entities: in each case one artifact already spans both files, so the floor is *structural*, independent of embedding quality); the RAG arm is reported but **never asserted**, so a model bump can't redden CI.
 7. **Tier-4 one-hop invalidation** — a content diff invalidates *exactly* the artifacts whose grounding span changed (set-equality: no over-invalidation, no stale survivors); a version bump invalidates everything.
 8. **Invariants** — zero orphans (every snapshot artifact is grounded), and re-indexing the same SHA yields the identical set of artifact ids.
+9. **Semantic grounding floor** — the LLM-grounded describer's claims are validated against the artifact's own spans by a deterministic sub-property gate; an adversarial fabricated claim is *dropped*, never stored (run on a stub LLM, so it gates without an API key).
 
 The identity rules in `kb.ids` (and `kb.structural`) are **LOCKED**: changing one is a breaking change, gated behind a `NORMALIZATION_VERSION` / `extractor_version` bump so existing digests are invalidated rather than silently colliding.
 

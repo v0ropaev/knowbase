@@ -192,6 +192,46 @@ def provenance_for_artifact(conn: Connection, sha: str, logical_key: str) -> lis
     return [ProvenanceRow(*row) for row in rows]
 
 
+@dataclass(frozen=True)
+class ArtifactSpanRow:
+    span_id: bytes
+    fq_symbol_path: str
+    raw_text: str  # the span's source text at this sha (input + ground-truth for the LLM describer)
+
+
+def spans_for_artifact(conn: Connection, sha: str, logical_key: str) -> list[ArtifactSpanRow]:
+    """The grounding spans of the ``(sha, logical_key)`` artifact, with id + fq path + source text.
+
+    Feeds the LLM-grounded describer: the spans are both the prompt context and the deterministic
+    ground truth its claims are validated against (DESIGN.md §9).
+    """
+    join = (
+        m.snapshot_entry.join(
+            m.artifact_derived_from,
+            m.artifact_derived_from.c.artifact_id == m.snapshot_entry.c.artifact_id,
+        )
+        .join(m.code_span, m.code_span.c.span_id == m.artifact_derived_from.c.span_id)
+        .join(
+            m.span_occurrence,
+            and_(
+                m.span_occurrence.c.span_id == m.artifact_derived_from.c.span_id,
+                m.span_occurrence.c.sha == sha,
+            ),
+        )
+    )
+    rows = conn.execute(
+        select(
+            m.code_span.c.span_id,
+            m.code_span.c.fq_symbol_path,
+            m.span_occurrence.c.raw_text,
+        )
+        .select_from(join)
+        .where(m.snapshot_entry.c.sha == sha, m.snapshot_entry.c.logical_key == logical_key)
+        .order_by(m.code_span.c.fq_symbol_path)
+    ).all()
+    return [ArtifactSpanRow(r.span_id, r.fq_symbol_path, r.raw_text) for r in rows]
+
+
 def _like_literal(value: str, suffix: str) -> str:
     escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return escaped + suffix

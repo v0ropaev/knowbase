@@ -73,6 +73,9 @@ def summarize(kind: str, payload: dict[str, Any]) -> str:
         framework = payload.get("framework", "?")
         n_fields = len(payload.get("fields", []))
         return f"{payload.get('qualified_name', '?')} ({framework}, {n_fields} fields)"
+    if kind == "description":
+        summary = str(payload.get("summary", "")).strip().splitlines()
+        return summary[0] if summary else f"description of {payload.get('target_logical_key', '?')}"
     return kind
 
 

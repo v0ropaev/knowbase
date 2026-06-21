@@ -285,6 +285,12 @@ rejected. **Verbalized LLM confidence is never used as the score.**
 > in a process summary is a real sink-registry match on the path; path endpoints are real
 > entrypoints/sinks. Confidence must honestly count *unknown-unknowns* (edges never discovered
 > by the ~70%-recall call-graph engine), not only "unresolved on the path it found".
+>
+> *Implemented (first slice):* the `kb describe` describer enforces this floor —
+> `kb.extract.semantic.grounding.validate_claims` drops any claim whose cited symbol is absent from
+> the artifact's grounding spans; an artifact with no surviving claim is not stored. The gate is
+> deterministic, so `semantic_grounding_test` enforces it in CI (stub LLM, no API key), including an
+> adversarial fabricated claim that must be dropped.
 
 ---
 
@@ -319,7 +325,7 @@ freshness(current|stale@sha)`, with a deterministic tie-break for reproducible e
 | `kb.eval` | Tiered eval; deterministic tiers gate CI. | pytest over SHA-pinned golden repos |
 | `kb.mcp` | Read-only MCP server; provenance-carrying records; budget-aware assembly. | FastMCP (pinned), Pydantic models |
 | `kb.daemon` | Orchestration + CLI: index a repo @ SHA, run extractors in order, write snapshot, host MCP. | typer |
-| `kb.extract.semantic` *(deferred)* | The one grounded business-process extractor: entrypoints → call-graph slice → sinks → LLM labeler → span-binding validator. | tree-sitter queries, `PathEngine` (call-graph), YAML sink registry, thin LLM adapter |
+| `kb.extract.semantic` | **First slice shipped:** `kb describe` — LLM-grounded NL descriptions of routes/entities, each claim validated against the artifact's spans by a deterministic sub-property gate (`grounding.validate_claims`); separate key-gated pass, never on `index`. *Deferred:* the grounded business-process extractor (entrypoints → call-graph slice → sinks → LLM labeler → span-binding validator). | thin LLM adapter (`kb.llm`); later: `PathEngine` (call-graph), YAML sink registry |
 
 ---
 
