@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Docker** (`Dockerfile`, `docker-compose.yml`, `.github/workflows/docker.yml`): a multi-stage,
+  uv-based image published to GHCR (`ghcr.io/v0ropaev/knowbase`) — `:edge` from `master`, semver +
+  `:latest` on `v*` tags, multi-arch amd64+arm64. The **slim** default image carries `index` /
+  `migrate` / `serve` / `introspect`; the **`-embed`** tag adds CPU-torch for `kb embed` + search. A
+  `docker compose` brings up a `pgvector` Postgres + the CLI for local dev/eval. CI build-validates on
+  PRs (hadolint + build, no push) and publishes on master/tags.
+- **`kb migrate`** CLI command: applies the Alembic schema to `head` (`--db-url` or `KB_DB_URL`).
+
 - **Deterministic entities extractor** (`kb.extract.deterministic.entities`): a fully static
   (tree-sitter) extractor that emits one `entity` artifact per domain class — pydantic `BaseModel`,
   `@dataclass`, and SQLAlchemy declarative model — with its fields, grounded on the class-definition

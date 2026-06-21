@@ -1,7 +1,8 @@
 """The ``kb`` command-line interface (DESIGN.md §11).
 
-``kb index`` runs the spine for one commit. ``serve`` (MCP) and ``introspect`` (the eval-only
-FastAPI oracle) are stubs in this push — they belong to the next push (DESIGN.md §8 "Next push").
+``kb index`` runs the spine for one commit; ``migrate`` applies the schema; ``embed`` populates
+embeddings; ``serve`` hosts the read-only MCP server over stdio; ``introspect`` is the eval-only
+sandboxed FastAPI openapi oracle.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from kb.extract.deterministic.entities import EntityExtractor
 from kb.extract.deterministic.fastapi_contract import FastAPIExtractor
 from kb.extract.deterministic.imports import ImportExtractor
 from kb.introspect import introspect_app
-from kb.store.engine import make_engine
+from kb.store.engine import make_engine, resolve_db_url
 
 app = typer.Typer(no_args_is_help=True, help="knowbase — a provenance-grounded knowledge layer.")
 
@@ -38,6 +39,18 @@ def index(
     )
     if result.gaps:
         typer.echo(f"  gaps (unparseable, recorded): {', '.join(result.gaps)}")
+
+
+@app.command()
+def migrate(
+    db_url: str | None = typer.Option(None, "--db-url", help="Postgres URL (else KB_DB_URL env)."),
+) -> None:
+    """Apply all Alembic migrations up to head (creates/updates the schema)."""
+    from kb.store.migrate import upgrade_to_head  # local import keeps alembic off other commands
+
+    resolved = resolve_db_url(db_url)
+    upgrade_to_head(resolved)
+    typer.echo(f"migrated to head: {resolved}")
 
 
 @app.command()
