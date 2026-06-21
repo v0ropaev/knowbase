@@ -90,7 +90,9 @@ flowchart LR
 - **A frozen RAG-over-source baseline** and the **Tier-3 knowledge-vs-RAG recall gate** — the honest A/B that backs the "knowledge > RAG" thesis.
 - **Eight HARD CI eval gates** (see [Development](#development)).
 
-**Not done yet** (and deliberately not faked): the semantic / **LLM-grounded** extraction layer, the nightly LLM-judged A/B, ADR mining from git history, grounded business-process extraction, incremental re-index on git push, and languages beyond Python. See the [Roadmap](#roadmap).
+- **A nightly LLM-judged A/B** (optional, key-gated, **non-gating**) — an answerer LLM answers each question from knowbase's grounded context vs a RAG-over-source context, and a judge LLM scores **answer accuracy** (against hand-written gold) + **hallucination**. Tracked metrics on top of recall; it never blocks CI.
+
+**Not done yet** (and deliberately not faked): the semantic / **LLM-grounded** extraction layer, ADR mining from git history, grounded business-process extraction, incremental re-index on git push, and languages beyond Python. See the [Roadmap](#roadmap).
 
 ## Quickstart
 
@@ -226,7 +228,7 @@ flowchart LR
 
 Next milestones:
 
-- [ ] **Nightly LLM-judged A/B** (key-gated, non-gating) — grounded-answer accuracy + hallucination rate on top of recall.
+- [x] **Nightly LLM-judged A/B** (key-gated, non-gating) — grounded-answer accuracy + hallucination rate on top of recall. *(shipped)*
 - [ ] **LLM-grounded semantic layer** — model-backed artifacts that still carry ≥ 1 span (`extraction_method = "llm_grounded"`).
 - [ ] **Incremental re-index on git push** — turn the diff-based invalidation seed into live updates.
 - [ ] **ADR mining** from git / PR history.

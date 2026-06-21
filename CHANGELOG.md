@@ -26,6 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tier-3 entity questions** (`kb.eval.questions`): the knowledge-vs-RAG A/B now also covers domain
   entities (a two-file `Order`/`LineItem` fixture), asserting knowbase cross-file recall@k == 1.0 for
   entity questions as well as API-contract questions.
+- **Nightly LLM-judged A/B** (`kb.llm`, `kb.eval.tier3_llm_judge_test`, `.github/workflows/nightly-llm-ab.yml`):
+  an optional, key-gated, **non-gating** answer-quality comparison. An answerer LLM answers each question
+  from knowbase-grounded context vs RAG-over-source context; a judge LLM scores accuracy against
+  hand-written `GOLD` references and flags hallucination (claims unsupported by that arm's context).
+  `kb.llm.providers` mirrors the embed-provider pattern (Anthropic default, OpenAI optional, lazy imports
+  via the new `llm` extra); the test self-skips without an API key and asserts only that the A/B ran
+  (never the win); the nightly workflow uploads a metrics artifact. `RagHit` gained a `raw_text` field so
+  the RAG arm can feed chunk text to the answerer.
 
 ## [0.2.0] - 2026-06-02
 
