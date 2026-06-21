@@ -37,6 +37,13 @@ dev = [
 embed = [
     "sentence-transformers>=3,<6",
 ]
+# LLM backend for the optional, nightly, NON-gating LLM-judged A/B (kb.llm + tier3_llm_judge_test).
+# Not needed for index/serve/embed; the nightly workflow uses `uv sync --extra dev --extra embed
+# --extra llm`. Also makes the existing OpenAI embedding adapter installable.
+llm = [
+    "anthropic>=0.40",
+    "openai>=1.40",
+]
 
 [project.scripts]
 kb = "kb.daemon.cli:app"
@@ -86,7 +93,7 @@ ignore_errors = true
 [[tool.mypy.overrides]]
 module = [
     "pygit2.*", "grimp.*", "sqlparse.*", "fastapi.*", "starlette.*", "fastmcp.*", "mcp.*",
-    "sentence_transformers.*", "pgvector.*", "openai.*",
+    "sentence_transformers.*", "pgvector.*", "openai.*", "anthropic.*",
 ]
 ignore_missing_imports = true
 

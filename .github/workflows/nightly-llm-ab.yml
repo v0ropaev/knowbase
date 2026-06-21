@@ -1,0 +1,71 @@
+name: Nightly LLM A/B
+
+# Optional, NON-gating answer-quality A/B (knowbase context vs RAG context), judged by an LLM.
+# Runs nightly and on demand. Self-skips when no API key secret is set; never blocks merges (it is a
+# separate workflow from CI, and the judge step is continue-on-error). The deterministic Tier-3 recall
+# gate in CI remains the hard floor.
+
+on:
+  schedule:
+    - cron: "0 6 * * *"  # 06:00 UTC nightly
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-llm-ab
+  cancel-in-progress: true
+
+jobs:
+  ab:
+    name: LLM-judged knowledge-vs-RAG A/B
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      KB_TEST_DB_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/postgres
+      KB_LLM_PROVIDER: anthropic
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      KB_LLM_AB_METRICS: tier3_llm_ab_metrics.json
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install dependencies (incl. llm extra)
+        run: uv sync --extra dev --extra embed --extra llm
+
+      - name: Cache embedding model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-all-MiniLM-L6-v2-v1
+
+      - name: Warm up embedding model
+        run: uv run python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+
+      - name: LLM-judged A/B (tracked, non-gating; self-skips without ANTHROPIC_API_KEY)
+        continue-on-error: true
+        run: uv run pytest src/kb/eval/tier3_llm_judge_test.py -q -s
+
+      - name: Upload A/B metrics
+        uses: actions/upload-artifact@v4
+        with:
+          name: tier3-llm-ab-metrics
+          path: tier3_llm_ab_metrics.json
+          if-no-files-found: ignore

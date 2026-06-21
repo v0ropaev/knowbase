@@ -75,3 +75,24 @@ QUESTIONS: list[Question] = [
     Question("e3", "Which model does the Order entity's items field reference, and where is it?",
              ENTITY_CROSS_FILE, frozenset({"entity:app.domain.order.Order"})),
 ]
+
+# Hand-written reference answers (the gold oracle for the nightly LLM-judged A/B, PR-3b). Derived
+# from the fixtures above (we own them), so accuracy is judged against ground truth — not against
+# either arm's own retrieval (no knowbase-favoring bias). Keep in sync with FILES / ENTITY_FILES.
+GOLD: dict[str, str] = {
+    "q1": "A JSON array of OrderOut objects; each OrderOut has id (int) and total (float).",
+    "q2": "The fields of OrderOut: id (int) and total (float).",
+    "q3": "Accepts an OrderIn request body with a single field item (str); returns an OrderOut "
+          "(id: int, total: float).",
+    "q4": "OrderOut, which has id (int) and total (float).",
+    "q5": "OrderOut (id: int, total: float).",
+    "q6": "201.",
+    "q7": "float.",
+    "q8": "GET /api/orders (also POST and GET /api/orders/{order_id}) returns OrderOut; "
+          "OrderOut is defined in src/app/schemas.py.",
+    "e1": "Order (a dataclass) has id (int) and items (a list of LineItem); each LineItem has "
+          "sku (str) and qty (int, default 1).",
+    "e2": "Order has id (int) and items, where items is list[LineItem]; LineItem has sku (str) and "
+          "qty (int).",
+    "e3": "It references LineItem, defined in src/app/domain/line_item.py.",
+}

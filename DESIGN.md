@@ -264,10 +264,14 @@ Eval is **co-equal with extraction**, weighted to cheap/exact tiers that gate CI
 - **Tier 2 — golden curated repos (TRACKED, non-gating).** 3–5 SHA-pinned permissive Python
   repos; one **held out** and never used for tuning (the real trust signal). Report per-repo,
   never just the mean.
-- **Tier 3 — downstream vs RAG (TRACKED, after MCP).** Fixed ~30–50 question set; coding agent
+- **Tier 3 — downstream vs RAG (TRACKED, after MCP).** Fixed question set; coding agent
   answers with knowbase-MCP vs a **frozen, peer-reviewed** pgvector-RAG baseline (same
   Postgres, same model). **Pre-register the win threshold.** Metrics: grounded-answer accuracy,
   hallucination rate (claims with no provenance), tokens-to-answer, tool round-trips.
+  *Implemented:* the deterministic cross-file recall gate (`tier3_rag_test`, HARD) plus an optional,
+  key-gated, NON-gating **LLM-judged A/B** (`kb.llm` + `tier3_llm_judge_test`, run nightly): an answerer
+  answers each question from knowbase context vs RAG context, and a judge scores accuracy against
+  hand-written gold + hallucination, comparing to a pre-registered threshold (printed, never asserted).
 
 **Invariants asserted as exact ground truth every run:** every artifact has ≥1 `derived_from`
 row (zero orphans); re-running an extractor on the same span identity+version yields an

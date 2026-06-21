@@ -39,6 +39,7 @@ class RagHit:
     start_line: int
     end_line: int
     distance: float
+    raw_text: str = ""  # the chunk's source text (for the LLM A/B answerer); empty unless selected
 
 
 def chunk_source(file_path: str, source: str) -> list[Chunk]:
@@ -103,11 +104,13 @@ def rag_retrieve(
             m.rag_chunk.c.start_line,
             m.rag_chunk.c.end_line,
             distance.label("distance"),
+            m.rag_chunk.c.raw_text,
         )
         .where(m.rag_chunk.c.sha == sha, m.rag_chunk.c.embedding.is_not(None))
         .order_by(distance)
         .limit(k)
     ).all()
     return [
-        RagHit(r.file_path, r.chunk_idx, r.start_line, r.end_line, float(r.distance)) for r in rows
+        RagHit(r.file_path, r.chunk_idx, r.start_line, r.end_line, float(r.distance), r.raw_text)
+        for r in rows
     ]
