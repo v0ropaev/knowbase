@@ -9,7 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- (nothing yet)
+- **LLM-grounded semantic layer — first slice** (`kb.extract.semantic`, `kb describe`): an optional,
+  key-gated pass (separate from `kb index`) has an LLM write a short NL summary + structured claims
+  for each `api_route` / `entity` artifact in a snapshot. Every claim is validated against the
+  artifact's own grounding spans by a **deterministic sub-property gate**
+  (`grounding.validate_claims`) — claims citing a symbol not in the code are dropped, and a
+  `description` artifact is stored only if something survives, grounded on the same spans
+  (`extraction_method = "llm_grounded"`, `model_id` + `prompt_version` in the artifact key). Surfaced
+  via MCP `get_knowledge` / `search_knowledge`. Uses `kb.llm` (Anthropic default, OpenAI optional).
+- **Semantic grounding HARD gate** (`kb.eval.semantic_grounding_test`): runs the describer on a
+  **stub** LLM (no API key) and asserts an adversarial fabricated claim is dropped while the grounded
+  claim is stored — the DESIGN §9 semantic floor, enforced deterministically in CI. Headline HARD
+  gates: eight → **nine**.
 
 ## [0.3.0] - 2026-06-21
 

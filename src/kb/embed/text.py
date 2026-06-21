@@ -35,4 +35,7 @@ def embed_text(kind: str, payload: dict[str, Any]) -> str:
             + " ".join(str(r.get("name", "")) for r in payload.get("related_entities", [])),
         ]
         return " ".join(p for p in parts if p.strip())
+    if kind == "description":
+        claims = " ".join(str(c.get("text", "")) for c in payload.get("claims", []))
+        return f"{payload.get('summary', '')} {claims}".strip() or head
     return head

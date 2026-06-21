@@ -78,6 +78,36 @@ def embed(
 
 
 @app.command()
+def describe(
+    db_url: str | None = typer.Option(None, "--db-url", help="Postgres URL (else KB_DB_URL env)."),
+    sha: str | None = typer.Option(None, "--sha", help="Snapshot sha to describe (def: latest)."),
+) -> None:
+    """LLM-grounded NL descriptions for a snapshot (separate key-gated pass; never on `index`)."""
+    from kb.extract.semantic.describe import describe_snapshot  # lazy: keeps the LLM off other cmds
+    from kb.llm.providers import default_llm_provider, has_llm_key
+    from kb.store.queries import latest_ingested_sha
+
+    if not has_llm_key():
+        typer.echo("no LLM API key (set ANTHROPIC_API_KEY or OPENAI_API_KEY)")
+        raise typer.Exit(code=1)
+    engine = make_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            target = sha or latest_ingested_sha(conn)
+        if target is None:
+            typer.echo("no snapshot to describe")
+            raise typer.Exit(code=1)
+        provider = default_llm_provider()
+        result = describe_snapshot(engine, target, provider)
+        typer.echo(
+            f"described {result.described} artifacts (dropped {result.dropped_claims} claims) "
+            f"@ {target[:12]} with {provider.model_id}"
+        )
+    finally:
+        engine.dispose()
+
+
+@app.command()
 def serve(
     db_url: str | None = typer.Option(None, "--db-url", help="Postgres URL (else KB_DB_URL env)."),
 ) -> None:
