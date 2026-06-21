@@ -1,0 +1,26 @@
+# Keep the build context small and the image clean. The build needs the source layout
+# (src/, migrations/, db/, alembic.ini, pyproject.toml, uv.lock) — everything else is excluded.
+.git
+.github
+.venv
+**/__pycache__/
+*.pyc
+.mypy_cache
+.ruff_cache
+.pytest_cache
+*.egg-info
+# local Postgres data / scratch / editor dirs
+*.sqlite
+*.db
+.idea
+.vscode
+.DS_Store
+# docs/config not needed at runtime (README + LICENSE are copied explicitly in the Dockerfile)
+CHANGELOG.md
+CONTRIBUTING.md
+CODE_OF_CONDUCT.md
+SECURITY.md
+DESIGN.md
+docker-compose.yml
+Dockerfile
+.dockerignore

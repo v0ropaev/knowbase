@@ -9,6 +9,7 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Checked with mypy](https://img.shields.io/badge/mypy-strict-blue)](https://mypy-lang.org/)
+[![GHCR image](https://img.shields.io/badge/ghcr.io-knowbase-2496ED?logo=docker&logoColor=white)](https://github.com/v0ropaev/knowbase/pkgs/container/knowbase)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/v0ropaev/knowbase/pulls)
 
 </div>
@@ -163,6 +164,34 @@ uv run kb introspect app.main:app --repo <path>   # sandboxed app.openapi() orac
 
 `kb introspect` runs a FastAPI app in a network-blocked sandbox and emits its `openapi()` as JSON — the ground truth the Tier-1 API gate scores the **static** contract extractor against. It executes user code, so it is eval-only and never runs during indexing.
 
+## Run with Docker
+
+Prebuilt images are published to **GHCR**: `ghcr.io/v0ropaev/knowbase` (`:edge` from `master`, `:X.Y.Z`/`:latest` on releases; multi-arch amd64+arm64). The default image is **slim** (no torch — `index` / `migrate` / `serve` / `introspect`); the **`-embed`** tag (e.g. `:edge-embed`) adds CPU-torch for `kb embed` and semantic search.
+
+```bash
+docker pull ghcr.io/v0ropaev/knowbase:latest
+docker run --rm ghcr.io/v0ropaev/knowbase:latest --help
+```
+
+As an **MCP server** (stdio), pointed at your Postgres — this is the form an MCP client launches:
+
+```bash
+docker run -i --rm ghcr.io/v0ropaev/knowbase:latest serve --db-url <postgres-url>
+```
+
+### Local dev/eval with `docker compose`
+
+The bundled compose brings up a `pgvector` Postgres plus the `kb` CLI built from this checkout:
+
+```bash
+docker compose up -d db                                  # Postgres (pgvector)
+docker compose run --rm kb migrate                       # apply the schema
+docker compose run --rm kb index /workspace --sha HEAD   # index the mounted repo
+docker compose run --rm -i kb serve                      # MCP over stdio
+```
+
+The compose Postgres also backs the test suite from the host: `KB_TEST_DB_URL=postgresql+psycopg://postgres:postgres@localhost:5432/postgres uv run pytest src/kb/eval -q`. For embeddings, build the image with the embed extra: `docker compose build --build-arg EXTRAS="--extra embed" kb`.
+
 ## Architecture
 
 A Python package `kb` (uv, src-layout). Modules and their responsibilities:
@@ -180,7 +209,7 @@ A Python package `kb` (uv, src-layout). Modules and their responsibilities:
 | `kb.mcp` | Read-only MCP server and its provenance-carrying records: `find_provenance`, `get_knowledge`, `search_knowledge`. |
 | `kb.embed` | Replaceable embedding adapters (sentence-transformers default, OpenAI optional) + snapshot population. Torch isolated behind the `embed` extra and a lazy import. |
 | `kb.rag` | The frozen pgvector RAG-over-source baseline — the "other arm" of the knowledge-vs-RAG A/B (no provenance, no grounding). |
-| `kb.daemon.cli` | The `kb` CLI: `index`, `embed`, `serve` (MCP), and `introspect` — all functional. |
+| `kb.daemon.cli` | The `kb` CLI: `index`, `migrate`, `embed`, `serve` (MCP), and `introspect` — all functional. |
 | `kb.eval` | Eight HARD CI gates (identity reproducibility, adversarial grounding, Tier-1 import oracle, Tier-1 API oracle, Tier-1 entities oracle, Tier-3 knowledge-vs-RAG recall, Tier-4 one-hop invalidation, invariants) plus the supporting MCP / embed / store suite. |
 
 Core tables: `commit_ref`, `branch_ref`, `code_span`, `span_occurrence`, `artifact` (now with `embedding vector(384)` + `embedding_model_id`), `artifact_derived_from`, `snapshot_entry`, and `rag_chunk` (the baseline arm).

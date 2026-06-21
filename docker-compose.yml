@@ -1,0 +1,44 @@
+# Local dev / eval: a pgvector Postgres + the kb CLI built from this repo.
+#
+#   docker compose up -d db                 # start Postgres (also usable by host `pytest` via
+#                                           # KB_TEST_DB_URL=postgresql+psycopg://postgres:postgres@localhost:5432/postgres)
+#   docker compose run --rm kb migrate      # apply the schema
+#   docker compose run --rm kb index /workspace --sha HEAD   # index the mounted repo (this checkout)
+#   docker compose run --rm -i kb serve     # MCP server over stdio
+#
+# For embeddings/search, build the kb service with the embed extra:
+#   docker compose build --build-arg EXTRAS="--extra embed" kb
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - kbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  kb:
+    build:
+      context: .
+      args:
+        EXTRAS: ""  # set to "--extra embed" to include CPU-torch for `kb embed` / search
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      KB_DB_URL: postgresql+psycopg://postgres:postgres@db:5432/postgres
+    volumes:
+      - .:/workspace:ro  # the repo to index (read-only); override with your own path
+    profiles: ["cli"]    # not started by `up`; invoke with `docker compose run --rm kb <command>`
+
+volumes:
+  kbdata:
