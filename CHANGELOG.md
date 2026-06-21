@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- (nothing yet)
+
+## [0.3.0] - 2026-06-21
+
+### Added
+
 - **Docker** (`Dockerfile`, `docker-compose.yml`, `.github/workflows/docker.yml`): a multi-stage,
   uv-based image published to GHCR (`ghcr.io/v0ropaev/knowbase`) — `:edge` from `master`, semver +
   `:latest` on `v*` tags, multi-arch amd64+arm64. The **slim** default image carries `index` /
@@ -16,7 +22,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docker compose` brings up a `pgvector` Postgres + the CLI for local dev/eval. CI build-validates on
   PRs (hadolint + build, no push) and publishes on master/tags.
 - **`kb migrate`** CLI command: applies the Alembic schema to `head` (`--db-url` or `KB_DB_URL`).
-
 - **Deterministic entities extractor** (`kb.extract.deterministic.entities`): a fully static
   (tree-sitter) extractor that emits one `entity` artifact per domain class — pydantic `BaseModel`,
   `@dataclass`, and SQLAlchemy declarative model — with its fields, grounded on the class-definition
@@ -104,6 +109,7 @@ freshness).
   import oracle, Tier-4 one-hop invalidation, and the store/provenance invariants — run in CI
   against a PostgreSQL 17 service.
 
-[Unreleased]: https://github.com/v0ropaev/knowbase/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/v0ropaev/knowbase/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/v0ropaev/knowbase/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/v0ropaev/knowbase/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/v0ropaev/knowbase/releases/tag/v0.1.0
