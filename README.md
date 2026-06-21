@@ -81,7 +81,7 @@ flowchart LR
 
 ## Status
 
-**v0.2 — spine + the first knowledge extractors, MCP serving, and the knowledge-vs-RAG gate.** Everything here grounds what it claims, and nothing it cannot:
+**v0.3 — spine, deterministic knowledge extractors (with cross-file grounding), MCP serving, the knowledge-vs-RAG gates, and published Docker images.** Everything here grounds what it claims, and nothing it cannot:
 
 - **Provenance spine** — content-addressed `span_id` (LOCKED); tree-sitter spans with a normalized S-expression fingerprint and per-SHA location; a single-Postgres, Alembic-managed store with content-addressed idempotent writes; the ≥ 1 `derived_from` anti-hallucination invariant enforced in-app *and* by a deferred DB trigger; pygit2 git ingest (no checkout) with a diff-based invalidation seed.
 - **Deterministic extractors** — the **import / dependency graph** (grimp resolves the edge, tree-sitter grounds it on the exact import statement, with an honest `approximate` fallback for re-exports / relative / unmappable imports — never a silent loss); the **FastAPI API-contract** extractor, which grounds a single route **across files** (handler in `routes.py` + `response_model` class in `schemas.py`); and the **domain-entity** extractor (pydantic / dataclass / SQLAlchemy classes and their fields, grounded on the class definition **and cross-file on the entities they reference** — purely static, with documented detection limits).

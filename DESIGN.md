@@ -1,11 +1,12 @@
 # knowbase — Design
 
-> Status: **agreed MVP design**, implemented through **v0.2**. This document is the source of truth
+> Status: **agreed MVP design**, implemented through **v0.3**. This document is the source of truth
 > for the architecture. It supersedes the original free-form spec. Load-bearing decisions that are
 > expensive to change later are marked **[LOCKED]**; everything else is revisable. The MVP vertical
-> slice in §8 has shipped (provenance spine, import + FastAPI extractors, the sandboxed openapi oracle,
-> the read-only MCP server, pgvector embeddings/search, and the RAG A/B gate); items still labelled
-> *deferred* below remain so.
+> slice in §8 has shipped (provenance spine, import + FastAPI + domain-entity extractors — the latter
+> with cross-file `related_entity` grounding, the sandboxed openapi oracle, the read-only MCP server,
+> pgvector embeddings/search, the RAG A/B gate plus a nightly LLM-judged A/B, and published Docker
+> images); items still labelled *deferred* below remain so.
 
 ---
 
