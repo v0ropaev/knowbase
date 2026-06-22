@@ -89,7 +89,7 @@ flowchart LR
 - **Read-only MCP server** — `find_provenance`, `get_knowledge`, and `search_knowledge`, each returning provenance-carrying units (method + confidence + freshness).
 - **pgvector embeddings + semantic search** — a replaceable embedding provider (sentence-transformers by default, OpenAI optional) populated by a separate `kb embed` pass; torch stays out of the index path.
 - **A frozen RAG-over-source baseline** and the **Tier-3 knowledge-vs-RAG recall gate** — the honest A/B that backs the "knowledge > RAG" thesis.
-- **LLM-grounded descriptions** — an optional, key-gated `kb describe` pass has an LLM write NL summaries for routes/entities; every claim is validated against the artifact's own spans by a deterministic sub-property gate, so ungrounded claims are *dropped* (the anti-hallucination invariant, with a model in the loop). Stored as `extraction_method = "llm_grounded"`, grounded on the same spans.
+- **LLM-grounded descriptions** — an optional, key-gated `kb describe` pass has an LLM write NL summaries for routes, entities, and modules (per file, grounded on all of the file's spans); every claim is validated against the target's own spans by a deterministic sub-property gate, so ungrounded claims are *dropped* (the anti-hallucination invariant, with a model in the loop). Stored as `extraction_method = "llm_grounded"`, grounded on the same spans.
 - **Nine HARD CI eval gates** (see [Development](#development)).
 
 - **A nightly LLM-judged A/B** (optional, key-gated, **non-gating**) — an answerer LLM answers each question from knowbase's grounded context vs a RAG-over-source context, and a judge LLM scores **answer accuracy** (against hand-written gold) + **hallucination**. Tracked metrics on top of recall; it never blocks CI.
@@ -149,7 +149,7 @@ uv run kb embed --db-url <postgres-url>   # separate pass: populate artifact emb
 uv run kb describe --db-url <postgres-url>   # separate, key-gated pass (ANTHROPIC_API_KEY / OPENAI_API_KEY)
 ```
 
-`kb describe` has an LLM (via `kb.llm`, `KB_LLM_PROVIDER` in {`anthropic`,`openai`}) write a short NL summary + structured claims for each route/entity in the latest snapshot. **Every claim is validated against that artifact's own grounding spans** — claims citing a symbol not in the code are dropped, and a `description` artifact is stored only if something survives, grounded on the same spans (`extraction_method = "llm_grounded"`). It needs an API key, never runs on `kb index`, and the deterministic grounding gate is exercised in CI without a key (stub LLM).
+`kb describe` has an LLM (via `kb.llm`, `KB_LLM_PROVIDER` in {`anthropic`,`openai`}) write a short NL summary + structured claims for each route, entity, and module (per file, grounded on all of the file's spans) in the latest snapshot. **Every claim is validated against that target's own grounding spans** — claims citing a symbol not in the code are dropped, and a `description` artifact is stored only if something survives, grounded on the same spans (`extraction_method = "llm_grounded"`). It needs an API key, never runs on `kb index`, and the deterministic grounding gate is exercised in CI without a key (stub LLM).
 
 ### Serve to an AI agent (MCP)
 
@@ -218,7 +218,7 @@ A Python package `kb` (uv, src-layout). Modules and their responsibilities:
 | `kb.mcp` | Read-only MCP server and its provenance-carrying records: `find_provenance`, `get_knowledge`, `search_knowledge`. |
 | `kb.embed` | Replaceable embedding adapters (sentence-transformers default, OpenAI optional) + snapshot population. Torch isolated behind the `embed` extra and a lazy import. |
 | `kb.rag` | The frozen pgvector RAG-over-source baseline — the "other arm" of the knowledge-vs-RAG A/B (no provenance, no grounding). |
-| `kb.extract.semantic` | LLM-grounded extraction (`kb describe`): NL descriptions of routes/entities with a deterministic sub-property gate (`grounding.validate_claims`) that drops any claim not backed by the artifact's spans. Separate key-gated pass; never on `index`. |
+| `kb.extract.semantic` | LLM-grounded extraction (`kb describe`): NL descriptions of routes/entities/modules with a deterministic sub-property gate (`grounding.validate_claims`) that drops any claim not backed by the target's spans. Separate key-gated pass; never on `index`. |
 | `kb.daemon.cli` | The `kb` CLI: `index`, `migrate`, `embed`, `describe`, `serve` (MCP), and `introspect` — all functional. |
 | `kb.eval` | Nine HARD CI gates (identity reproducibility, adversarial grounding, Tier-1 import oracle, Tier-1 API oracle, Tier-1 entities oracle, Tier-3 knowledge-vs-RAG recall, Tier-4 one-hop invalidation, invariants, semantic grounding floor) plus the supporting MCP / embed / store suite. |
 
