@@ -232,6 +232,48 @@ def spans_for_artifact(conn: Connection, sha: str, logical_key: str) -> list[Art
     return [ArtifactSpanRow(r.span_id, r.fq_symbol_path, r.raw_text) for r in rows]
 
 
+@dataclass(frozen=True)
+class ModuleTarget:
+    module: str  # the file's module span fq path (e.g. "app.schemas")
+    file_path: str
+    spans: list[ArtifactSpanRow]  # ALL of the file's spans (module + classes/functions/imports)
+
+
+def module_targets(conn: Connection, sha: str) -> list[ModuleTarget]:
+    """First-party modules in ``sha``'s snapshot, each with all of its spans.
+
+    A module is not an artifact, so it is enumerated from its span occurrences at ``sha`` (which are
+    first-party-only — the pipeline parses solely files under the first-party root). Feeds the
+    LLM-grounded module describer: the file's spans are both the prompt context and the
+    deterministic ground truth its claims are validated against (DESIGN.md §9).
+    """
+    join = m.code_span.join(m.span_occurrence, m.span_occurrence.c.span_id == m.code_span.c.span_id)
+    rows = conn.execute(
+        select(
+            m.code_span.c.span_id,
+            m.code_span.c.span_kind,
+            m.code_span.c.fq_symbol_path,
+            m.span_occurrence.c.raw_text,
+            m.span_occurrence.c.file_path,
+        )
+        .select_from(join)
+        .where(m.span_occurrence.c.sha == sha)
+        .order_by(m.span_occurrence.c.file_path, m.code_span.c.fq_symbol_path)
+    ).all()
+    by_file: dict[str, list[Any]] = {}
+    for row in rows:
+        by_file.setdefault(row.file_path, []).append(row)
+    targets: list[ModuleTarget] = []
+    for file_path, file_rows in by_file.items():
+        module = next(
+            (r.fq_symbol_path for r in file_rows if r.span_kind == "module"),
+            file_rows[0].fq_symbol_path,
+        )
+        spans = [ArtifactSpanRow(r.span_id, r.fq_symbol_path, r.raw_text) for r in file_rows]
+        targets.append(ModuleTarget(module=module, file_path=file_path, spans=spans))
+    return targets
+
+
 def _like_literal(value: str, suffix: str) -> str:
     escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return escaped + suffix

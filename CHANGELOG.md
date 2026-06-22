@@ -17,10 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `description` artifact is stored only if something survives, grounded on the same spans
   (`extraction_method = "llm_grounded"`, `model_id` + `prompt_version` in the artifact key). Surfaced
   via MCP `get_knowledge` / `search_knowledge`. Uses `kb.llm` (Anthropic default, OpenAI optional).
+- **Per-module descriptions** (`kb describe`, second slice): the same pass now also describes each
+  first-party module (file). A module is not an artifact, so it is enumerated from its span
+  occurrences (`store.queries.module_targets`) and grounded on **all** of the file's spans
+  (module + classes/functions/imports); `target_kind="module"`, logical key `desc:module:<fqname>`.
+  The same span-validation gate applies, so a module gets a description only if a cited symbol
+  actually occurs in the file — no new invariants. The `semantic_grounding` HARD gate is extended
+  with the module path (adversarial claim dropped; a module with no matching symbol gets nothing).
 - **Semantic grounding HARD gate** (`kb.eval.semantic_grounding_test`): runs the describer on a
   **stub** LLM (no API key) and asserts an adversarial fabricated claim is dropped while the grounded
-  claim is stored — the DESIGN §9 semantic floor, enforced deterministically in CI. Headline HARD
-  gates: eight → **nine**.
+  claim is stored — on both the artifact and the module path — the DESIGN §9 semantic floor,
+  enforced deterministically in CI. Headline HARD gates: eight → **nine**.
 
 ## [0.3.0] - 2026-06-21
 
