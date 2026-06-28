@@ -176,6 +176,7 @@ Eight tables. The load-bearing edge is `artifact ||--|{ artifact_derived_from` �
 is the deliberately separate RAG baseline arm (raw source windows, no provenance).
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'background':'#FAF3E7','primaryColor':'#FAF3E7','primaryTextColor':'#071812','primaryBorderColor':'#1C4434','lineColor':'#3C5B4E','secondaryColor':'#EDE3D2','tertiaryColor':'#F3EAD9','textColor':'#1C4434','fontFamily':'ui-sans-serif, system-ui, sans-serif'}}}%%
 erDiagram
     commit_ref     ||--o{ span_occurrence       : "at sha"
     commit_ref     ||--o{ snapshot_entry         : "snapshot"
@@ -195,6 +196,7 @@ erDiagram
 ## 7. Pipeline
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'background':'#FAF3E7','primaryColor':'#FAF3E7','primaryTextColor':'#071812','primaryBorderColor':'#1C4434','lineColor':'#3C5B4E','secondaryColor':'#EDE3D2','tertiaryColor':'#F3EAD9','textColor':'#1C4434','fontFamily':'ui-sans-serif, system-ui, sans-serif'}}}%%
 flowchart TD
     I1["1 · INGEST<br/>repo @ SHA → commit_ref (+parents);<br/>on a new commit, diff vs prior indexed SHA"]
     I2["2 · STRUCTURE<br/>tree-sitter → spans (per-SHA location);<br/>upsert code_span (identity) + span_occurrence"]

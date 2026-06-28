@@ -24,6 +24,9 @@ htmlcov/
 # Local databases / scratch
 *.sqlite3
 
+# Local brand source renders (only optimized, renamed copies in assets/ are published)
+design/
+
 # IDEs / OS
 .idea/
 .vscode/
