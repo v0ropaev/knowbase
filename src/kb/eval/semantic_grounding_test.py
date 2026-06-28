@@ -123,3 +123,28 @@ def test_module_descriptions_are_grounded(engine: Engine, tmp_path: Path) -> Non
     # every claim was a hallucination relative to the file's spans, so nothing is stored.
     assert "app.main" not in described
     assert "app.__init__" not in described
+
+
+def test_package_descriptions_are_grounded(engine: Engine, tmp_path: Path) -> None:
+    """The same span-validation gate covers per-package architecture overviews (DESIGN.md §9)."""
+    sha = _index(engine, tmp_path)
+    describe_snapshot(engine, sha, _StubProvider())
+
+    rows = _description_rows(engine, sha)
+    packages = {
+        r.payload["target_logical_key"]: r
+        for r in rows
+        if r.payload["target_kind"] == "package"
+    }
+    # `app` is a package (src/app/__init__.py exists); its member spans (the __init__ + schemas /
+    # routes / main) contain OrderOut, so the package overview is produced.
+    assert "app" in packages
+    row = packages["app"]
+    assert row.logical_key == "desc:package:app"
+    symbols = [c["symbol"] for c in row.payload["claims"]]
+    assert REAL in symbols  # the grounded claim survives on the package path
+    assert FAKE not in symbols  # adversarial: the fabricated claim is dropped on the package path
+    assert row.is_deterministic is False  # surfaced as llm_grounded
+    with engine.connect() as conn:
+        prov_files = {p.file_path for p in provenance_for_artifact(conn, sha, row.logical_key)}
+    assert prov_files  # grounded on the package's code spans (>= 1 file)

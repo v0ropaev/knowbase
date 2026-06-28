@@ -304,13 +304,15 @@ rejected. **Verbalized LLM confidence is never used as the score.**
 > entrypoints/sinks. Confidence must honestly count *unknown-unknowns* (edges never discovered
 > by the ~70%-recall call-graph engine), not only "unresolved on the path it found".
 >
-> *Implemented (first slice):* the `kb describe` describer enforces this floor —
+> *Implemented:* the `kb describe` describer enforces this floor —
 > `kb.extract.semantic.grounding.validate_claims` drops any claim whose cited symbol is absent from
 > the target's grounding spans; a target with no surviving claim is not stored. It covers
-> `api_route`/`entity` artifacts and **per-module (file) descriptions** (a module is enumerated from
-> its span occurrences and grounded on *all* of the file's spans). The gate is deterministic, so
-> `semantic_grounding_test` enforces it in CI (stub LLM, no API key), including an adversarial
-> fabricated claim that must be dropped — on both the artifact and the module path.
+> `api_route`/`entity` artifacts, **per-module (file) descriptions**, and **per-package architecture
+> overviews** (a package is grounded on its own and its direct-child modules' spans; the overview
+> synthesizes the import graph + public surface + member-module summaries as *context*, but claims
+> still validate against code spans, so provenance stays code-grounded). The gate is deterministic,
+> so `semantic_grounding_test` enforces it in CI (stub LLM, no API key), including an adversarial
+> fabricated claim that must be dropped — on the artifact, module, and package paths.
 
 ---
 
@@ -345,7 +347,7 @@ freshness(current|stale@sha)`, with a deterministic tie-break for reproducible e
 | `kb.eval` | Tiered eval; deterministic tiers gate CI. | pytest over SHA-pinned golden repos |
 | `kb.mcp` | Read-only MCP server; provenance-carrying records; budget-aware assembly. | FastMCP (pinned), Pydantic models |
 | `kb.daemon` | Orchestration + CLI: index a repo @ SHA, run extractors in order, write snapshot, host MCP. | typer |
-| `kb.extract.semantic` | **First slice shipped:** `kb describe` — LLM-grounded NL descriptions of routes/entities/modules (modules grounded on all of the file's spans), each claim validated against the target's spans by a deterministic sub-property gate (`grounding.validate_claims`); separate key-gated pass, never on `index`. *Deferred:* the grounded business-process extractor (entrypoints → call-graph slice → sinks → LLM labeler → span-binding validator). | thin LLM adapter (`kb.llm`); later: `PathEngine` (call-graph), YAML sink registry |
+| `kb.extract.semantic` | **Shipped:** `kb describe` — LLM-grounded NL descriptions of routes/entities/modules **and per-package architecture overviews** (a package grounded on its own + direct-child modules' spans; the overview synthesizes the import graph + public surface + member-module summaries as context, claims code-grounded), each claim validated against the target's spans by a deterministic sub-property gate (`grounding.validate_claims`); separate key-gated pass, never on `index`. *Deferred:* whole-repo overview; the grounded business-process extractor (entrypoints → call-graph slice → sinks → LLM labeler → span-binding validator). | thin LLM adapter (`kb.llm`); later: `PathEngine` (call-graph), YAML sink registry |
 
 ---
 

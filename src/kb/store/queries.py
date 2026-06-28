@@ -276,6 +276,55 @@ def module_targets(conn: Connection, sha: str) -> list[ModuleTarget]:
     return targets
 
 
+@dataclass(frozen=True)
+class PackageTarget:
+    package: str  # the package's dotted name (e.g. "app", "kb.store")
+    init_file_path: str  # the package's __init__.py path
+    member_modules: list[str]  # the package module itself + its DIRECT-child modules
+    spans: list[ArtifactSpanRow]  # grounding spans of those member modules' files
+
+
+def _parent_module(module: str) -> str:
+    return module.rsplit(".", 1)[0] if "." in module else ""
+
+
+def package_targets(conn: Connection, sha: str) -> list[PackageTarget]:
+    """First-party packages (``__init__.py`` files) in ``sha``'s snapshot, each grounded on its own
+    and its DIRECT-child modules' spans.
+
+    A package is identified by an ``__init__.py`` file; its name is that file's module-span fq path
+    (``app/__init__.py`` -> ``app``). The grounding set is the package module plus modules ``M``
+    where ``parent(M) == P`` — direct children only, NOT the whole subtree, so a root package's
+    stays bounded (grandchildren are covered by their own nearer package overview). Feeds the
+    per-package architecture-overview describer (DESIGN.md §9, §11).
+    """
+    modules = module_targets(conn, sha)
+    by_module = {mt.module: mt for mt in modules}
+    all_modules = set(by_module)
+    targets: list[PackageTarget] = []
+    for mt in modules:
+        if mt.file_path.rsplit("/", 1)[-1] != "__init__.py":
+            continue
+        package = mt.module
+        children = sorted(
+            mod for mod in all_modules if mod != package and _parent_module(mod) == package
+        )
+        members = [package, *children]
+        spans: list[ArtifactSpanRow] = []
+        for mod in members:
+            member = by_module.get(mod)
+            if member is not None:
+                spans.extend(member.spans)
+        spans.sort(key=lambda s: s.fq_symbol_path)
+        targets.append(
+            PackageTarget(
+                package=package, init_file_path=mt.file_path, member_modules=members, spans=spans
+            )
+        )
+    targets.sort(key=lambda t: t.package)
+    return targets
+
+
 def is_sha_indexed(conn: Connection, sha: str) -> bool:
     """True if ``sha`` has a snapshot manifest (>= 1 ``snapshot_entry``) — the witness of a real
     index. ``commit_ref`` / ``span_occurrence`` rows are written even by partial runs, so they are
