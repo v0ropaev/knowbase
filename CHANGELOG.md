@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Per-package architecture overviews** (`kb describe`, third slice): the key-gated describe pass now
+  also writes a per-package overview (`target_kind="package"`, logical key `desc:package:<P>`) for each
+  first-party package (an `__init__.py`). A package is grounded on its own and its **direct-child**
+  modules' spans (bounded — not the whole subtree); the overview synthesizes **rich context** — the
+  package's import edges (internal + cross-package), its `public_symbol` surface, and its member
+  modules' description summaries — but claims still validate against the package's **code spans** via
+  `grounding.validate_claims`, so provenance stays code-grounded. New `store.queries.package_targets`;
+  `describe._build_prompt` gained a `facts_cap` (existing route/entity/module prompts unchanged — no
+  `PROMPT_VERSION` bump, no re-describe churn). The semantic-grounding HARD gate is extended with the
+  package path (adversarial claim dropped); headline HARD gates stay **eleven**.
+
 - **Library public-API-surface extractor** (`kb.extract.deterministic.library_surface`): a fourth
   deterministic extractor emitting one `public_symbol` artifact per name a package exposes from its
   `__init__.py` — covering the libraries/SDK target alongside web/API + entities. The public surface
