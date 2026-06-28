@@ -73,6 +73,10 @@ def summarize(kind: str, payload: dict[str, Any]) -> str:
         framework = payload.get("framework", "?")
         n_fields = len(payload.get("fields", []))
         return f"{payload.get('qualified_name', '?')} ({framework}, {n_fields} fields)"
+    if kind == "public_symbol":
+        via = "re-export" if payload.get("is_reexport") else payload.get("exported_via", "?")
+        kind_label = payload.get("symbol_kind") or "?"
+        return f"{payload.get('public_qualified_name', '?')} ({kind_label}, {via})"
     if kind == "description":
         summary = str(payload.get("summary", "")).strip().splitlines()
         return summary[0] if summary else f"description of {payload.get('target_logical_key', '?')}"

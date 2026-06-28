@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Library public-API-surface extractor** (`kb.extract.deterministic.library_surface`): a fourth
+  deterministic extractor emitting one `public_symbol` artifact per name a package exposes from its
+  `__init__.py` — covering the libraries/SDK target alongside web/API + entities. The public surface
+  is determined statically with tree-sitter (`__all__`-authoritative, else top-level non-underscore
+  functions/classes; never imports/executes user code); `__init__` re-exports (`from .sub import X`)
+  are resolved **cross-file** to the defining function/class span (role `definition`) and grounded
+  additionally on the `__init__` import statement (role `re_export`). Third-party / dynamic-`__all__`
+  / star re-exports are grounded-but-flagged in `payload.limitations`, never silently lost. Registered
+  in `kb index`; `summarize` / `embed_text` gained a `public_symbol` branch.
+- **Tier-1 library-surface HARD gate** (`kb.eval.library_surface_test`, `kb.eval._surface`): the
+  extracted surface equals an INDEPENDENT **griffe** static oracle (a different engine; dev-only,
+  offline, never on the index path — mirroring how fastapi powers the openapi oracle), with cross-file
+  re-export grounding, underscore-private exclusion, and a flagged third-party re-export asserted as a
+  known gap. New dev dependency `griffe>=1.5,<3`. Headline HARD gates: ten → **eleven**.
+
 - **Incremental (diff-based) re-index** (`kb index --incremental` / `--parent <sha>`): `index_commit`
   can index a commit against an already-indexed parent — reusing the spans of files unchanged since
   the parent snapshot (rebuilt from the DB, no tree-sitter re-parse) and parsing only changed/new

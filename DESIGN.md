@@ -231,7 +231,10 @@ test.)
 - **(a)** Import/dependency extractor: spans from tree-sitter, edge resolution via grimp.
 - **(b)** API-contract extractor: **FastAPI** routes (route → handler → params/response),
   grounded **across files**, scored against `app.openapi()` (free exact oracle).
-  Library public-API-surface via **griffe** as the sibling for SDK targets.
+- **(c)** Library public-API-surface extractor *(shipped)*: one `public_symbol` per name a package
+  exposes from its `__init__.py` (`__all__`-authoritative; `__init__` re-exports resolved
+  **cross-file** to the defining function/class). Extractor is tree-sitter-static (never imports
+  user code); scored against **griffe** as a dev-only independent static oracle (never on `index`).
 - Single Postgres with the `≥1 derived_from` invariant enforced at write.
 - **Adversarial fixture:** an ungrounded artifact that the write-time check **must reject** —
   so the anti-hallucination discipline is tested in the MVP, not deferred with the LLM.
@@ -263,6 +266,11 @@ Eval is **co-equal with extraction**, weighted to cheap/exact tiers that gate CI
   - *API contract:* extracted routes/params/schemas vs `app.openapi()` / `get_openapi(
     routes=app.routes)`, compared **$ref-resolved, order-insensitive**, encoding the oracle's
     documented blind spots (Mount sub-apps, WebSocket, `include_in_schema=False`).
+  - *Library surface:* extracted public-API surface vs **griffe** (an INDEPENDENT static engine,
+    dev-only) — `__all__`-authoritative, `__init__` re-exports resolved cross-file; canonicalized to
+    the top package's functions/classes (Scope A), with third-party / dynamic-`__all__` re-exports
+    grounded-but-flagged as known gaps. Entities use a hand-labeled oracle (no independent one
+    exists); the library surface has griffe, so the gate is independent like the API one.
 - **Tier 4 — incremental-invalidation regression (HARD GATE).** Per SHA-pair, assert
   `invalidated_set == expected` exactly (over-invalidation *and* stale-survival both fail).
   Separate *version-bump* invalidation (full) from *content-diff* invalidation (minimal).
@@ -328,7 +336,7 @@ freshness(current|stale@sha)`, with a deterministic tie-break for reproducible e
 | Module | Responsibility | Key tech |
 |--------|----------------|----------|
 | `kb.structural` | Parse Python without executing it; enumerate symbols/imports/call-sites with per-SHA byte/line ranges; compute content-addressed span identity; incremental reparse. Hidden behind a `StructuralIndex`/`PathEngine` interface so a SCIP backend can replace tree-sitter later. | tree-sitter + tree-sitter-python (canonical bindings) |
-| `kb.extract.deterministic` | No-LLM extractors → exact artifacts (confidence=1.0): import graph; FastAPI API contract (static, cross-file grounded); domain entities (pydantic/dataclass/SQLAlchemy, static, cross-file links to referenced entities, hand-labeled gate); griffe library surface (planned). | grimp, tree-sitter queries, griffe (static) |
+| `kb.extract.deterministic` | No-LLM extractors → exact artifacts (confidence=1.0): import graph; FastAPI API contract (static, cross-file grounded); domain entities (pydantic/dataclass/SQLAlchemy, static, cross-file links to referenced entities, hand-labeled gate); library public-API surface (static tree-sitter, cross-file `__init__` re-export resolution, independent griffe-oracle gate). | grimp, tree-sitter queries; griffe (dev-only oracle) |
 | `kb.introspect` | Eval-only runtime oracle: runs a FastAPI app in a network-blocked sandbox and emits `app.openapi()` for the Tier-1 API gate. Never on the index path. | subprocess sandbox, fastapi |
 | `kb.embed` | Replaceable embedding adapters + snapshot population for `search_knowledge`. Torch isolated behind the `embed` extra and a lazy import. | sentence-transformers (default), OpenAI (optional), pgvector |
 | `kb.rag` | Frozen pgvector RAG-over-source baseline — the "other arm" of the knowledge-vs-RAG A/B (no provenance/grounding). | deterministic line-window chunker, pgvector |
@@ -357,8 +365,11 @@ Review fact-checked these against current (2026) sources. Caveats are first-clas
   executes user code → **deferred, eval-only, sandboxed** (subprocess, no network, resource
   limits) or an opt-in `knowbase introspect` the user runs in their own venv. The serving
   extractor is **static** (tree-sitter).
-- **griffe** (static) — ready-made library public-API-surface extractor (signatures, types,
-  docstrings) with built-in API-diff. Keep in **static** mode (dynamic mode imports code).
+- **griffe** (static) — ready-made library public-API-surface analyzer (signatures, types,
+  docstrings) with built-in API-diff. Used as the **dev-only independent oracle** for the
+  library-surface Tier-1 gate (`allow_inspection=False` → never executes code); the serving
+  extractor is tree-sitter-static and never imports it (mirrors how fastapi powers the openapi
+  oracle while the route extractor stays static).
 - **PostgreSQL 17** — single store. We avoid Apache AGE because the invalidation DAG is shallow
   (1–4 hops) and a single store is simpler — **not** because of a "~40× faster" figure (that
   number traces to one alpha-era microbenchmark of ~1.86×; **struck**). Recursive CTEs are
