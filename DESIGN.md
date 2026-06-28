@@ -209,8 +209,12 @@ flowchart TD
     EMB -.-> I7
 ```
 
-`[deferred]` SEMANTIC EXTRACT, recursive invalidation, ADR mining. (EMBED + `search_knowledge` and the
-runtime openapi oracle shipped in v0.2; the oracle stays eval-only.)
+`[deferred]` recursive (artifact→artifact) invalidation, ADR mining. (EMBED + `search_knowledge` and
+the runtime openapi oracle shipped in v0.2; the oracle stays eval-only. The LLM-grounded SEMANTIC
+EXTRACT — `kb describe` — and **diff-based incremental re-index** have since shipped: `index_commit`
+can reuse the spans of files unchanged since an already-indexed parent and parse only the diff, with
+extraction still run fully so the snapshot is identical to a full re-index — `INVALIDATE` is now wired
+into the index path, not just the invalidation query.)
 
 ---
 
@@ -262,6 +266,12 @@ Eval is **co-equal with extraction**, weighted to cheap/exact tiers that gate CI
 - **Tier 4 — incremental-invalidation regression (HARD GATE).** Per SHA-pair, assert
   `invalidated_set == expected` exactly (over-invalidation *and* stale-survival both fail).
   Separate *version-bump* invalidation (full) from *content-diff* invalidation (minimal).
+- **Incremental re-index equivalence (HARD GATE).** An incremental re-index (reuse unchanged files'
+  spans from the parent snapshot, parse only the diff) must yield the *identical*
+  `{logical_key: artifact_id}` snapshot as a full re-index of the same tree — verified across two
+  distinct SHAs in one database (artifact ids are content-addressed) — and must provably skip the
+  parse for unchanged files (`parsed_files`/`reused_files` counters). A missing/unindexed parent or a
+  first-party-root change falls back to a full index.
 - **Tier 2 — golden curated repos (TRACKED, non-gating).** 3–5 SHA-pinned permissive Python
   repos; one **held out** and never used for tuning (the real trust signal). Report per-repo,
   never just the mean.

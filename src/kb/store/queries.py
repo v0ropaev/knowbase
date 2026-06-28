@@ -8,7 +8,9 @@ from typing import Any, cast
 
 from sqlalchemy import Connection, and_, or_, select
 
+from kb.ids import NORMALIZATION_VERSION
 from kb.store import models as m
+from kb.structural.interface import ParsedSpan
 
 
 def invalidated_artifact_ids(
@@ -272,6 +274,68 @@ def module_targets(conn: Connection, sha: str) -> list[ModuleTarget]:
         spans = [ArtifactSpanRow(r.span_id, r.fq_symbol_path, r.raw_text) for r in file_rows]
         targets.append(ModuleTarget(module=module, file_path=file_path, spans=spans))
     return targets
+
+
+def is_sha_indexed(conn: Connection, sha: str) -> bool:
+    """True if ``sha`` has a snapshot manifest (>= 1 ``snapshot_entry``) — the witness of a real
+    index. ``commit_ref`` / ``span_occurrence`` rows are written even by partial runs, so they are
+    not reliable witnesses; the manifest is (DESIGN.md §7)."""
+    stmt = select(m.snapshot_entry.c.logical_key).where(m.snapshot_entry.c.sha == sha).limit(1)
+    return conn.execute(stmt).first() is not None
+
+
+def reusable_spans(
+    conn: Connection, sha: str, file_paths: Collection[str]
+) -> list[tuple[str, ParsedSpan]]:
+    """Reconstruct ``(file_path, ParsedSpan)`` for ``file_paths`` from the snapshot at ``sha``.
+
+    Feeds the incremental indexer: a file unchanged since the parent commit needs no re-parse — its
+    spans are rebuilt from ``code_span ⋈ span_occurrence`` (identity + per-SHA location) and an
+    occurrence is written at the child SHA. Only spans at the current ``NORMALIZATION_VERSION`` are
+    returned, so a normalization bump forces a fresh parse rather than reusing stale identities.
+    """
+    if not file_paths:
+        return []
+    join = m.code_span.join(m.span_occurrence, m.span_occurrence.c.span_id == m.code_span.c.span_id)
+    rows = conn.execute(
+        select(
+            m.span_occurrence.c.file_path,
+            m.code_span.c.span_kind,
+            m.code_span.c.fq_symbol_path,
+            m.code_span.c.structural_fingerprint,
+            m.code_span.c.span_id,
+            m.code_span.c.lang,
+            m.span_occurrence.c.start_byte,
+            m.span_occurrence.c.end_byte,
+            m.span_occurrence.c.start_line,
+            m.span_occurrence.c.end_line,
+            m.span_occurrence.c.raw_text,
+        )
+        .select_from(join)
+        .where(
+            m.span_occurrence.c.sha == sha,
+            m.span_occurrence.c.file_path.in_(list(file_paths)),
+            m.code_span.c.normalization_version == NORMALIZATION_VERSION,
+        )
+    ).all()
+    return [
+        (
+            r.file_path,
+            ParsedSpan(
+                span_kind=r.span_kind,
+                fq_symbol_path=r.fq_symbol_path,
+                structural_fingerprint=bytes(r.structural_fingerprint),
+                span_id=bytes(r.span_id),
+                lang=r.lang,
+                start_byte=r.start_byte,
+                end_byte=r.end_byte,
+                start_line=r.start_line,
+                end_line=r.end_line,
+                raw_text=r.raw_text,
+            ),
+        )
+        for r in rows
+    ]
 
 
 def _like_literal(value: str, suffix: str) -> str:

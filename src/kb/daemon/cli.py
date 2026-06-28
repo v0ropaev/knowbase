@@ -26,15 +26,31 @@ def index(
     repo: str = typer.Argument(..., help="Path to the git repository to index."),
     sha: str = typer.Option("HEAD", "--sha", help="Commit-ish to index (sha, branch, tag, HEAD)."),
     db_url: str | None = typer.Option(None, "--db-url", help="Postgres URL (else KB_DB_URL env)."),
+    incremental: bool = typer.Option(
+        False,
+        "--incremental/--full",
+        help="Reuse unchanged files' spans from the parent snapshot (parse only changed files).",
+    ),
+    parent: str | None = typer.Option(
+        None,
+        "--parent",
+        help="Parent commit-ish to diff against (implies --incremental; must be indexed).",
+    ),
 ) -> None:
     """Index one commit: ingest, parse spans, run deterministic extractors, write the snapshot."""
     engine = make_engine(db_url)
     result = index_commit(
-        engine, repo, sha, extractors=[ImportExtractor(), FastAPIExtractor(), EntityExtractor()]
+        engine,
+        repo,
+        sha,
+        extractors=[ImportExtractor(), FastAPIExtractor(), EntityExtractor()],
+        incremental=incremental,
+        parent=parent,
     )
     engine.dispose()
     typer.echo(
-        f"indexed {result.sha[:12]}: {result.files_indexed} files, {result.spans} spans, "
+        f"indexed {result.sha[:12]} ({result.mode}): {result.files_indexed} files "
+        f"({result.parsed_files} parsed, {result.reused_files} reused), {result.spans} spans, "
         f"{result.artifacts} artifacts, {len(result.gaps)} gaps"
     )
     if result.gaps:

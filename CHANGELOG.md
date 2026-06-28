@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Incremental (diff-based) re-index** (`kb index --incremental` / `--parent <sha>`): `index_commit`
+  can index a commit against an already-indexed parent — reusing the spans of files unchanged since
+  the parent snapshot (rebuilt from the DB, no tree-sitter re-parse) and parsing only changed/new
+  files. Extractors still run **fully** over the materialized tree (correct for cross-file
+  grimp/fastapi/entities; idempotent writes make unchanged artifacts no-ops), so the snapshot is
+  identical to a full re-index. The parent is auto-detected from `commit_ref.parent_shas` (first
+  indexed one); an explicit unindexed `--parent` raises, and a missing parent or a first-party-root
+  change falls back to a full index. New `store.queries.is_sha_indexed` / `reusable_spans`;
+  `IndexResult` gains `mode` / `parsed_files` / `reused_files`. Hook-friendly:
+  `kb index <repo> --sha <new> --parent <old>`.
+- **Incremental re-index equivalence HARD gate** (`kb.eval.incremental_reindex_test`): proves an
+  incremental re-index yields the same `{logical_key: artifact_id}` snapshot as a full re-index of
+  the same tree (compared across two distinct SHAs in one database) and that the parse is skipped for
+  unchanged files; plus full-fallback and unindexed-parent-raises cases. Headline HARD gates:
+  nine → **ten**.
+
 - **LLM-grounded semantic layer — first slice** (`kb.extract.semantic`, `kb describe`): an optional,
   key-gated pass (separate from `kb index`) has an LLM write a short NL summary + structured claims
   for each `api_route` / `entity` artifact in a snapshot. Every claim is validated against the
