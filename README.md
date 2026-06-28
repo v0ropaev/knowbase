@@ -90,7 +90,8 @@ flowchart LR
 - **pgvector embeddings + semantic search** — a replaceable embedding provider (sentence-transformers by default, OpenAI optional) populated by a separate `kb embed` pass; torch stays out of the index path.
 - **A frozen RAG-over-source baseline** and the **Tier-3 knowledge-vs-RAG recall gate** — the honest A/B that backs the "knowledge > RAG" thesis.
 - **LLM-grounded descriptions** — an optional, key-gated `kb describe` pass has an LLM write NL summaries for routes, entities, and modules (per file, grounded on all of the file's spans); every claim is validated against the target's own spans by a deterministic sub-property gate, so ungrounded claims are *dropped* (the anti-hallucination invariant, with a model in the loop). Stored as `extraction_method = "llm_grounded"`, grounded on the same spans.
-- **Nine HARD CI eval gates** (see [Development](#development)).
+- **Incremental re-index** — `kb index --parent <sha>` reuses unchanged files' spans from the parent snapshot and parses only the diff; extraction stays full, so the result is identical to a full re-index (a HARD gate proves it). Auto-detects the parent; falls back to full when none is indexed.
+- **Ten HARD CI eval gates** (see [Development](#development)).
 
 - **A nightly LLM-judged A/B** (optional, key-gated, **non-gating**) — an answerer LLM answers each question from knowbase's grounded context vs a RAG-over-source context, and a judge LLM scores **answer accuracy** (against hand-written gold) + **hallucination**. Tracked metrics on top of recall; it never blocks CI.
 
@@ -116,7 +117,7 @@ The base `--extra dev` install stays torch-free; the `embed` extra pulls sentenc
 ### Run the gates
 
 ```bash
-uv run pytest src/kb/eval -q   # the nine HARD gates (spins an ephemeral local Postgres)
+uv run pytest src/kb/eval -q   # the ten HARD gates (spins an ephemeral local Postgres)
 ```
 
 ### Index a commit
@@ -124,14 +125,19 @@ uv run pytest src/kb/eval -q   # the nine HARD gates (spins an ephemeral local P
 ```bash
 uv run kb --help
 uv run kb index <repo> --sha <sha> --db-url <postgres-url>
+
+# incremental: reuse unchanged files' spans from an already-indexed parent (parse only the diff)
+uv run kb index <repo> --sha <new-sha> --parent <old-sha> --db-url <postgres-url>
 ```
 
 `--sha` accepts any commit-ish (sha, branch, tag, or `HEAD`, the default). The database URL can also come from the `KB_DB_URL` environment variable instead of `--db-url`. A run prints what it produced:
 
 ```text
-indexed 4f1c2a9b8d3e: 12 files, 318 spans, 27 artifacts, 1 gaps
+indexed 4f1c2a9b8d3e (full): 12 files (12 parsed, 0 reused), 318 spans, 27 artifacts, 1 gaps
   gaps (unparseable, recorded): src/legacy/broken.py
 ```
+
+**Incremental re-index** (`--incremental`, or `--parent <sha>` which implies it) reuses the spans of files unchanged since the parent snapshot and parses only changed/new files; the extractors still run fully, so the snapshot is identical to a full re-index (a HARD gate proves it). The parent is auto-detected from the commit's parents (the first already-indexed one); a missing/unindexed parent or a first-party-root change falls back to a full index. This makes `kb index` cheap to wire to a git `post-receive` hook or a CI step: `kb index <repo> --sha <pushed> --parent <previous-head>`.
 
 Under the hood it runs the spine for that one commit — `INGEST → STRUCTURE → EXTRACT → SNAPSHOT`. For example, an import like `from shop.billing import charge` on line 1 of `shop/orders.py` becomes an `import_edge` artifact (`import:shop.orders->shop.billing`) grounded on the exact `import` span at that `file:line@sha`, with `span_mapping: "exact"`. **"Gaps"** are files that hit a syntax error: they are *recorded*, never silently dropped, so blind spots are visible rather than invisible.
 
@@ -219,8 +225,8 @@ A Python package `kb` (uv, src-layout). Modules and their responsibilities:
 | `kb.embed` | Replaceable embedding adapters (sentence-transformers default, OpenAI optional) + snapshot population. Torch isolated behind the `embed` extra and a lazy import. |
 | `kb.rag` | The frozen pgvector RAG-over-source baseline — the "other arm" of the knowledge-vs-RAG A/B (no provenance, no grounding). |
 | `kb.extract.semantic` | LLM-grounded extraction (`kb describe`): NL descriptions of routes/entities/modules with a deterministic sub-property gate (`grounding.validate_claims`) that drops any claim not backed by the target's spans. Separate key-gated pass; never on `index`. |
-| `kb.daemon.cli` | The `kb` CLI: `index`, `migrate`, `embed`, `describe`, `serve` (MCP), and `introspect` — all functional. |
-| `kb.eval` | Nine HARD CI gates (identity reproducibility, adversarial grounding, Tier-1 import oracle, Tier-1 API oracle, Tier-1 entities oracle, Tier-3 knowledge-vs-RAG recall, Tier-4 one-hop invalidation, invariants, semantic grounding floor) plus the supporting MCP / embed / store suite. |
+| `kb.daemon.cli` | The `kb` CLI: `index` (full or `--incremental`/`--parent`), `migrate`, `embed`, `describe`, `serve` (MCP), and `introspect` — all functional. |
+| `kb.eval` | Ten HARD CI gates (identity reproducibility, adversarial grounding, Tier-1 import oracle, Tier-1 API oracle, Tier-1 entities oracle, Tier-3 knowledge-vs-RAG recall, Tier-4 one-hop invalidation, invariants, semantic grounding floor, incremental re-index equivalence) plus the supporting MCP / embed / store suite. |
 
 Core tables: `commit_ref`, `branch_ref`, `code_span`, `span_occurrence`, `artifact` (now with `embedding vector(384)` + `embedding_model_id`), `artifact_derived_from`, `snapshot_entry`, and `rag_chunk` (the baseline arm).
 
@@ -230,10 +236,10 @@ Core tables: `commit_ref`, `branch_ref`, `code_span`, `span_occurrence`, `artifa
 uv sync --extra dev            # venv + install
 uv run ruff check src/kb       # lint
 uv run mypy                    # strict type-check
-uv run pytest src/kb/eval -q   # the nine HARD eval gates
+uv run pytest src/kb/eval -q   # the ten HARD eval gates
 ```
 
-CI (GitHub Actions, workflow **"CI"**, `.github/workflows/ci.yml`) runs ruff, `mypy --strict`, and the eval gates against a `pgvector/pgvector:pg17` service (with the embedding model cached). The **nine HARD gates** that block a merge:
+CI (GitHub Actions, workflow **"CI"**, `.github/workflows/ci.yml`) runs ruff, `mypy --strict`, and the eval gates against a `pgvector/pgvector:pg17` service (with the embedding model cached). The **ten HARD gates** that block a merge:
 
 1. **Identity reproducibility** — formatting / comment / docstring / location changes must NOT change `span_id`; a rename MUST. Pure identity core, no database.
 2. **Adversarial grounding** — an ungrounded artifact is rejected by *both* layers (the app's `GroundingError` and the DB's deferred `artifact_grounded_check` trigger); a genuinely grounded artifact commits cleanly.
@@ -244,6 +250,7 @@ CI (GitHub Actions, workflow **"CI"**, `.github/workflows/ci.yml`) runs ruff, `m
 7. **Tier-4 one-hop invalidation** — a content diff invalidates *exactly* the artifacts whose grounding span changed (set-equality: no over-invalidation, no stale survivors); a version bump invalidates everything.
 8. **Invariants** — zero orphans (every snapshot artifact is grounded), and re-indexing the same SHA yields the identical set of artifact ids.
 9. **Semantic grounding floor** — the LLM-grounded describer's claims are validated against the artifact's own spans by a deterministic sub-property gate; an adversarial fabricated claim is *dropped*, never stored (run on a stub LLM, so it gates without an API key).
+10. **Incremental re-index equivalence** — an incremental re-index (reuse unchanged files' spans from the parent, parse only the diff) yields the *identical* `{logical_key: artifact_id}` snapshot as a full re-index of the same tree, and the parse is provably skipped for unchanged files (counter assertions); a missing/unindexed parent falls back to full.
 
 The identity rules in `kb.ids` (and `kb.structural`) are **LOCKED**: changing one is a breaking change, gated behind a `NORMALIZATION_VERSION` / `extractor_version` bump so existing digests are invalidated rather than silently colliding.
 
@@ -270,7 +277,7 @@ Next milestones:
 
 - [x] **Nightly LLM-judged A/B** (key-gated, non-gating) — grounded-answer accuracy + hallucination rate on top of recall. *(shipped)*
 - [ ] **LLM-grounded semantic layer** — model-backed artifacts that still carry ≥ 1 span (`extraction_method = "llm_grounded"`).
-- [ ] **Incremental re-index on git push** — turn the diff-based invalidation seed into live updates.
+- [~] **Incremental re-index on git push** — *core shipped*: `kb index --incremental`/`--parent` reuses unchanged files' spans from the parent snapshot (extraction stays full; equivalence is gated). A live watch/push daemon is the remaining piece.
 - [ ] **ADR mining** from git / PR history.
 - [ ] **Grounded business-process extraction.**
 - [ ] **More languages** beyond Python.
