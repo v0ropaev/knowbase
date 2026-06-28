@@ -35,6 +35,16 @@ def embed_text(kind: str, payload: dict[str, Any]) -> str:
             + " ".join(str(r.get("name", "")) for r in payload.get("related_entities", [])),
         ]
         return " ".join(p for p in parts if p.strip())
+    if kind == "public_symbol":
+        parts = [
+            head,
+            f"public {payload.get('public_qualified_name', '')}",
+            f"name {payload.get('name', '')}",
+            f"kind {payload.get('symbol_kind') or ''}",
+            f"defined in {payload.get('defining_module') or ''}",
+            f"signature {payload.get('signature') or ''}",
+        ]
+        return " ".join(p for p in parts if p.strip())
     if kind == "description":
         claims = " ".join(str(c.get("text", "")) for c in payload.get("claims", []))
         return f"{payload.get('summary', '')} {claims}".strip() or head

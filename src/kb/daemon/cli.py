@@ -15,6 +15,7 @@ from kb.daemon.pipeline import index_commit
 from kb.extract.deterministic.entities import EntityExtractor
 from kb.extract.deterministic.fastapi_contract import FastAPIExtractor
 from kb.extract.deterministic.imports import ImportExtractor
+from kb.extract.deterministic.library_surface import LibrarySurfaceExtractor
 from kb.introspect import introspect_app
 from kb.store.engine import make_engine, resolve_db_url
 
@@ -43,7 +44,12 @@ def index(
         engine,
         repo,
         sha,
-        extractors=[ImportExtractor(), FastAPIExtractor(), EntityExtractor()],
+        extractors=[
+            ImportExtractor(),
+            FastAPIExtractor(),
+            EntityExtractor(),
+            LibrarySurfaceExtractor(),
+        ],
         incremental=incremental,
         parent=parent,
     )

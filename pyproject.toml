@@ -31,6 +31,9 @@ dev = [
     # extractor is tree-sitter-static and never imports it.
     "fastapi>=0.110",
     "pytest-asyncio>=0.23",
+    # griffe is the static, in-process independent oracle for the Tier-1 library-surface gate only;
+    # the serving extractor is tree-sitter-static and never imports it.
+    "griffe>=1.5,<3",
 ]
 # Embedding backend for `kb embed` / search_knowledge / the RAG baseline. Heavy (torch) — kept out
 # of the default install so `kb index` stays light; CI uses `uv sync --extra dev --extra embed`.
