@@ -1,8 +1,6 @@
-# knowbase
-
-> A versioned, provenance-grounded **knowledge layer** over a codebase — served to humans and AI agents. Not RAG-over-code.
-
 <div align="center">
+
+<img src="assets/hero.png" alt="knowbase — a versioned, provenance-grounded knowledge layer over a codebase, served to humans and AI agents" width="820">
 
 [![CI](https://github.com/v0ropaev/knowbase/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/v0ropaev/knowbase/actions/workflows/ci.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](./LICENSE)
@@ -14,11 +12,14 @@
 
 </div>
 
+> A versioned, provenance-grounded **knowledge layer** over a codebase — served to humans and AI agents. Not RAG-over-code.
+
 knowbase turns a git repository into a **Knowledge Layer**: a queryable, git-versioned model of what a codebase *means* — its architecture, domain entities, API contracts, dependencies, events, and business processes — where **every fact is bound to the exact lines of code it came from** (`file:line@sha`).
 
 The one thing that makes it different: it does not embed your code and hope. It **extracts** durable knowledge and grounds each unit in a real code span. LLMs and embeddings are *replaceable adapters* around that spine — swap the model, the knowledge and its provenance stay.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'background':'#FAF3E7','primaryColor':'#FAF3E7','primaryTextColor':'#071812','primaryBorderColor':'#1C4434','lineColor':'#3C5B4E','secondaryColor':'#EDE3D2','tertiaryColor':'#F3EAD9','textColor':'#1C4434','fontFamily':'ui-sans-serif, system-ui, sans-serif'}}}%%
 flowchart LR
     subgraph usual["The usual pipeline — lossy, opaque"]
         direction LR
@@ -53,6 +54,7 @@ Artifacts are content-addressed the same way — over their byte-sorted, de-dupl
 The spine is a handful of content-addressed tables: each **artifact** carries ≥ 1 `derived_from` edge to a **code_span**, spans are located **per-SHA** in `span_occurrence`, and a per-SHA **snapshot** ties the grounded artifacts to a commit.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'background':'#FAF3E7','primaryColor':'#FAF3E7','primaryTextColor':'#071812','primaryBorderColor':'#1C4434','lineColor':'#3C5B4E','secondaryColor':'#EDE3D2','tertiaryColor':'#F3EAD9','textColor':'#1C4434','fontFamily':'ui-sans-serif, system-ui, sans-serif'}}}%%
 flowchart TD
     AR["artifact<br/>knowledge unit (+ embedding)"]
     CS["code_span<br/>content-addressed id · location-free"]
@@ -68,6 +70,7 @@ flowchart TD
 Indexing one commit walks that spine end to end — `INGEST → STRUCTURE → INVALIDATE → EXTRACT → SNAPSHOT → SERVE`, with `kb embed` as a separate pass that adds pgvector semantic search on top:
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'background':'#FAF3E7','primaryColor':'#FAF3E7','primaryTextColor':'#071812','primaryBorderColor':'#1C4434','lineColor':'#3C5B4E','secondaryColor':'#EDE3D2','tertiaryColor':'#F3EAD9','textColor':'#1C4434','fontFamily':'ui-sans-serif, system-ui, sans-serif'}}}%%
 flowchart LR
     G["git blobs @ SHA<br/>no checkout"] --> S["tree-sitter spans<br/>content-addressed identity"]
     S --> I["invalidate<br/>diff-based"]
@@ -261,6 +264,7 @@ The identity rules in `kb.ids` (and `kb.structural`) are **LOCKED**: changing on
 The honest north star is to show that a grounded **knowledge layer beats RAG-over-code** on real questions. The reason it can is structural: to answer a cross-file contract question, RAG must independently retrieve *two* source chunks across files, while one grounded knowbase artifact already spans both — which is exactly what the Tier-3 gate measures.
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'background':'#FAF3E7','primaryColor':'#FAF3E7','primaryTextColor':'#071812','primaryBorderColor':'#1C4434','lineColor':'#3C5B4E','secondaryColor':'#EDE3D2','tertiaryColor':'#F3EAD9','textColor':'#1C4434','fontFamily':'ui-sans-serif, system-ui, sans-serif'}}}%%
 flowchart LR
     Q["Q: shape of GET /api/orders response?"]
     Q --> A["api:GET /api/orders<br/>(one grounded artifact)"]

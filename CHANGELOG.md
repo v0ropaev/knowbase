@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **README branding** — added a hero banner and brand assets under `assets/` (`hero.png`, `logo.png`,
+  `logo.svg`, `social-preview.png`, `avatar.png`) and recolored the Mermaid diagrams (README + DESIGN)
+  to the brand palette (cream / deep-green / gold). Source renders live in a git-ignored `design/`
+  folder; only optimized, renamed copies are published. (Repo social preview + avatar are uploaded
+  manually in GitHub Settings.)
+
 ### Added
 
 - **Per-package architecture overviews** (`kb describe`, third slice): the key-gated describe pass now
