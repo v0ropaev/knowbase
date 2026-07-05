@@ -4,7 +4,7 @@
 > for the architecture. It supersedes the original free-form spec. Load-bearing decisions that are
 > expensive to change later are marked **[LOCKED]**; everything else is revisable. The MVP vertical
 > slice in §8 has shipped (provenance spine, import + FastAPI + domain-entity + library-surface
-> extractors — with cross-file grounding, the sandboxed openapi and griffe oracles, the read-only MCP
+> + event-handler extractors — with cross-file grounding, the sandboxed openapi and griffe oracles, the read-only MCP
 > server, pgvector embeddings/search, the RAG A/B gate plus a nightly LLM-judged A/B, LLM-grounded
 > descriptions through per-package overviews, incremental re-index, and published Docker images);
 > items still labelled *deferred* below remain so.
@@ -238,6 +238,12 @@ test.)
   exposes from its `__init__.py` (`__all__`-authoritative; `__init__` re-exports resolved
   **cross-file** to the defining function/class). Extractor is tree-sitter-static (never imports
   user code); scored against **griffe** as a dev-only independent static oracle (never on `index`).
+- **(d)** Event-handler extractor *(shipped)*: one `event_handler` per handler carrying decorator
+  registrations — pydantic `@field_validator`/`@model_validator`, FastAPI `@app.on_event`,
+  SQLAlchemy `@event.listens_for` (stacked decorators aggregate in `payload.registrations`; one
+  artifact per handler because `artifact_id` is content-addressed over spans + extractor, §6).
+  Grounded on the handler span + cross-file on the listened-to class; hand-labeled Tier-1 gate.
+  Known gaps (asserted): call-form `event.listen(...)`, lifespan, pydantic-v1, dynamic names.
 - Single Postgres with the `≥1 derived_from` invariant enforced at write.
 - **Adversarial fixture:** an ungrounded artifact that the write-time check **must reject** —
   so the anti-hallucination discipline is tested in the MVP, not deferred with the LLM.
@@ -341,7 +347,7 @@ freshness(current|stale@sha)`, with a deterministic tie-break for reproducible e
 | Module | Responsibility | Key tech |
 |--------|----------------|----------|
 | `kb.structural` | Parse Python without executing it; enumerate symbols/imports/call-sites with per-SHA byte/line ranges; compute content-addressed span identity; incremental reparse. Hidden behind a `StructuralIndex`/`PathEngine` interface so a SCIP backend can replace tree-sitter later. | tree-sitter + tree-sitter-python (canonical bindings) |
-| `kb.extract.deterministic` | No-LLM extractors → exact artifacts (confidence=1.0): import graph; FastAPI API contract (static, cross-file grounded); domain entities (pydantic/dataclass/SQLAlchemy, static, cross-file links to referenced entities, hand-labeled gate); library public-API surface (static tree-sitter, cross-file `__init__` re-export resolution, independent griffe-oracle gate). | grimp, tree-sitter queries; griffe (dev-only oracle) |
+| `kb.extract.deterministic` | No-LLM extractors → exact artifacts (confidence=1.0): import graph; FastAPI API contract (static, cross-file grounded); domain entities (pydantic/dataclass/SQLAlchemy, static, cross-file links to referenced entities, hand-labeled gate); library public-API surface (static tree-sitter, cross-file `__init__` re-export resolution, independent griffe-oracle gate); event handlers (pydantic validators / FastAPI `on_event` / SQLAlchemy `listens_for`, static, cross-file target grounding, hand-labeled gate). | grimp, tree-sitter queries; griffe (dev-only oracle) |
 | `kb.introspect` | Eval-only runtime oracle: runs a FastAPI app in a network-blocked sandbox and emits `app.openapi()` for the Tier-1 API gate. Never on the index path. | subprocess sandbox, fastapi |
 | `kb.embed` | Replaceable embedding adapters + snapshot population for `search_knowledge`. Torch isolated behind the `embed` extra and a lazy import. | sentence-transformers (default), OpenAI (optional), pgvector |
 | `kb.rag` | Frozen pgvector RAG-over-source baseline — the "other arm" of the knowledge-vs-RAG A/B (no provenance/grounding). | deterministic line-window chunker, pgvector |
@@ -422,7 +428,9 @@ Review fact-checked these against current (2026) sources. Caveats are first-clas
 ## 14. Roadmap (post-MVP, indicative)
 
 1. Second deterministic family: **entities (pydantic/dataclass/SQLAlchemy) — shipped** (static
-   tree-sitter, hand-labeled Tier-1 gate); events where a real oracle exists (next).
+   tree-sitter, hand-labeled Tier-1 gate); **events — shipped** (decorator registrations for
+   pydantic/FastAPI/SQLAlchemy, static tree-sitter, hand-labeled Tier-1 gate; call-form
+   `event.listen` deferred).
 2. The **one** grounded business-process extractor (named real path + labeler + validator +
    deterministic sub-property gate).
 3. Recursive invalidation (`artifact_depends_on`), multi-branch dedup, freshness precompute.

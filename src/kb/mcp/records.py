@@ -77,6 +77,19 @@ def summarize(kind: str, payload: dict[str, Any]) -> str:
         via = "re-export" if payload.get("is_reexport") else payload.get("exported_via", "?")
         kind_label = payload.get("symbol_kind") or "?"
         return f"{payload.get('public_qualified_name', '?')} ({kind_label}, {via})"
+    if kind == "event_handler":
+        regs = payload.get("registrations", [])
+        first = regs[0] if regs else {}
+        trigger = (
+            first.get("event") or first.get("mode") or ",".join(first.get("fields", [])) or "?"
+        )
+        target = (
+            first.get("target") or payload.get("owner_class")
+            or first.get("decorator_object") or "?"
+        )
+        suffix = f" +{len(regs) - 1} more" if len(regs) > 1 else ""
+        family = first.get("family", "?")
+        return f"{payload.get('handler', '?')} on {target}:{trigger} ({family}{suffix})"
     if kind == "description":
         summary = str(payload.get("summary", "")).strip().splitlines()
         return summary[0] if summary else f"description of {payload.get('target_logical_key', '?')}"
