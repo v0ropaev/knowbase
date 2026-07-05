@@ -84,7 +84,7 @@ flowchart LR
 
 ## Status
 
-**v0.3 — spine, deterministic knowledge extractors (with cross-file grounding), MCP serving, the knowledge-vs-RAG gates, and published Docker images.** Everything here grounds what it claims, and nothing it cannot:
+**v0.4 — spine, four deterministic extractors (cross-file grounding, incl. the library public-API surface), LLM-grounded descriptions up to per-package architecture overviews, incremental re-index, MCP serving, the knowledge-vs-RAG gates, and published Docker images.** Everything here grounds what it claims, and nothing it cannot:
 
 - **Provenance spine** — content-addressed `span_id` (LOCKED); tree-sitter spans with a normalized S-expression fingerprint and per-SHA location; a single-Postgres, Alembic-managed store with content-addressed idempotent writes; the ≥ 1 `derived_from` anti-hallucination invariant enforced in-app *and* by a deferred DB trigger; pygit2 git ingest (no checkout) with a diff-based invalidation seed.
 - **Deterministic extractors** — the **import / dependency graph** (grimp resolves the edge, tree-sitter grounds it on the exact import statement, with an honest `approximate` fallback for re-exports / relative / unmappable imports — never a silent loss); the **FastAPI API-contract** extractor, which grounds a single route **across files** (handler in `routes.py` + `response_model` class in `schemas.py`); the **domain-entity** extractor (pydantic / dataclass / SQLAlchemy classes and their fields, grounded on the class definition **and cross-file on the entities they reference** — purely static, with documented detection limits); and the **library public-API-surface** extractor (what a package exposes from its `__init__.py` — `__all__`-authoritative, with `__init__` re-exports resolved **cross-file** to the defining function/class — validated against an independent **griffe** static oracle).
@@ -282,7 +282,7 @@ flowchart LR
 Next milestones:
 
 - [x] **Nightly LLM-judged A/B** (key-gated, non-gating) — grounded-answer accuracy + hallucination rate on top of recall. *(shipped)*
-- [ ] **LLM-grounded semantic layer** — model-backed artifacts that still carry ≥ 1 span (`extraction_method = "llm_grounded"`).
+- [x] **LLM-grounded semantic layer** — model-backed artifacts that still carry ≥ 1 span (`extraction_method = "llm_grounded"`): `kb describe` writes span-validated descriptions for routes, entities, modules, and per-package architecture overviews. *(shipped)*
 - [~] **Incremental re-index on git push** — *core shipped*: `kb index --incremental`/`--parent` reuses unchanged files' spans from the parent snapshot (extraction stays full; equivalence is gated). A live watch/push daemon is the remaining piece.
 - [ ] **ADR mining** from git / PR history.
 - [ ] **Grounded business-process extraction.**
