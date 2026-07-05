@@ -13,6 +13,7 @@ import typer
 
 from kb.daemon.pipeline import index_commit
 from kb.extract.deterministic.entities import EntityExtractor
+from kb.extract.deterministic.events import EventExtractor
 from kb.extract.deterministic.fastapi_contract import FastAPIExtractor
 from kb.extract.deterministic.imports import ImportExtractor
 from kb.extract.deterministic.library_surface import LibrarySurfaceExtractor
@@ -48,6 +49,7 @@ def index(
             ImportExtractor(),
             FastAPIExtractor(),
             EntityExtractor(),
+            EventExtractor(),
             LibrarySurfaceExtractor(),
         ],
         incremental=incremental,

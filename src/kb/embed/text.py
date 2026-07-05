@@ -45,6 +45,18 @@ def embed_text(kind: str, payload: dict[str, Any]) -> str:
             f"signature {payload.get('signature') or ''}",
         ]
         return " ".join(p for p in parts if p.strip())
+    if kind == "event_handler":
+        regs = payload.get("registrations", [])
+        parts = [
+            head,
+            "families " + " ".join(str(f) for f in payload.get("families", [])),
+            "events " + " ".join(str(r.get("event") or "") for r in regs),
+            "targets " + " ".join(str(r.get("target") or "") for r in regs),
+            f"owner {payload.get('owner_class') or ''}",
+            f"handler {payload.get('handler', '')}",
+            "fields " + " ".join(str(f) for r in regs for f in r.get("fields", [])),
+        ]
+        return " ".join(p for p in parts if p.strip())
     if kind == "description":
         claims = " ".join(str(c.get("text", "")) for c in payload.get("claims", []))
         return f"{payload.get('summary', '')} {claims}".strip() or head

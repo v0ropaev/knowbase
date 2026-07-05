@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Event-handler extractor** (`kb.extract.deterministic.events`): a fifth deterministic extractor
+  emitting one `event_handler` artifact per handler function/method that carries decorator
+  registrations — pydantic `@field_validator` / `@model_validator`, FastAPI `@app.on_event`, and
+  SQLAlchemy `@event.listens_for`. All of a handler's registrations (stacked decorators included)
+  live in `payload.registrations` — one artifact per handler, because `artifact_id` is
+  content-addressed over the grounding spans + extractor identity and same-handler registrations
+  share their evidence. Grounded on the handler span (role `handler`; the span includes its
+  decorators), the enclosing pydantic model (role `owner_class`), and every resolved listened-to
+  class (role `target_class`, **cross-file** — the `response_model` precedent). Known gaps flagged
+  or skipped, never guessed: call-form `event.listen(...)`, FastAPI lifespan, pydantic-v1
+  `@validator`, dynamic event/field names. Registered in `kb index`; `summarize` / `embed_text`
+  gained an `event_handler` branch. Fully static — never imports user code.
+- **Tier-1 events HARD gate** (`kb.eval.tier1_events_test`): extracted handlers match a hand-labeled
+  oracle (stacked `listens_for` decorators included); a SQLAlchemy listener is grounded cross-file on
+  the class it listens to; a non-first-party target is grounded-but-flagged; the call-form
+  `event.listen(...)` and a dynamic `@app.on_event(EVENT)` name are asserted as *known* gaps.
+  Headline HARD gates: eleven → **twelve**.
+
 ## [0.4.0] - 2026-06-29
 
 ### Changed
