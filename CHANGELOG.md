@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`kb watch` — incremental re-index daemon** (`kb.daemon.watch`), completing the "incremental
+  re-index on git push" roadmap item: polls a **local** branch ref (pygit2; no network, no
+  credentials — pair with a bare repo receiving pushes, a cron `git pull`, or a CI step with
+  `--once`) and indexes every new first-parent commit incrementally, one by one (`--max-catchup`
+  guard, default 50; beyond it — or after a force-push/rewind — a single incremental index of the
+  new head against the recorded cursor). The resume point lives in the previously-unused
+  `branch_ref` table and advances after **each** indexed commit, so a crash resumes where it left
+  off. `--interval` polling loop, Ctrl-C clean stop; failed ticks are logged and retried (`--once`
+  exits non-zero for cron). New `git.repo.branch_head_sha` / `first_parent_chain`,
+  `store.queries.branch_head`, `store.writer.upsert_branch_ref`; `kb index` and `kb watch` share
+  `default_extractors()`. One database tracks one repository. Watch tests are supporting suite —
+  headline HARD gates stay **twelve** (the incremental core itself is gate #12).
+
 - **Event-handler extractor** (`kb.extract.deterministic.events`): a fifth deterministic extractor
   emitting one `event_handler` artifact per handler function/method that carries decorator
   registrations — pydantic `@field_validator` / `@model_validator`, FastAPI `@app.on_event`, and

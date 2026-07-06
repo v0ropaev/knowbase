@@ -1,22 +1,20 @@
 """The ``kb`` command-line interface (DESIGN.md §11).
 
-``kb index`` runs the spine for one commit; ``migrate`` applies the schema; ``embed`` populates
-embeddings; ``serve`` hosts the read-only MCP server over stdio; ``introspect`` is the eval-only
-sandboxed FastAPI openapi oracle.
+``kb index`` runs the spine for one commit; ``watch`` polls a local branch ref and indexes new
+commits incrementally; ``migrate`` applies the schema; ``embed`` populates embeddings; ``serve``
+hosts the read-only MCP server over stdio; ``introspect`` is the eval-only sandboxed FastAPI
+openapi oracle.
 """
 
 from __future__ import annotations
 
 import json
 
+import pygit2
 import typer
 
 from kb.daemon.pipeline import index_commit
-from kb.extract.deterministic.entities import EntityExtractor
-from kb.extract.deterministic.events import EventExtractor
-from kb.extract.deterministic.fastapi_contract import FastAPIExtractor
-from kb.extract.deterministic.imports import ImportExtractor
-from kb.extract.deterministic.library_surface import LibrarySurfaceExtractor
+from kb.daemon.watch import default_extractors, run_watch
 from kb.introspect import introspect_app
 from kb.store.engine import make_engine, resolve_db_url
 
@@ -45,13 +43,7 @@ def index(
         engine,
         repo,
         sha,
-        extractors=[
-            ImportExtractor(),
-            FastAPIExtractor(),
-            EntityExtractor(),
-            EventExtractor(),
-            LibrarySurfaceExtractor(),
-        ],
+        extractors=default_extractors(),
         incremental=incremental,
         parent=parent,
     )
@@ -63,6 +55,53 @@ def index(
     )
     if result.gaps:
         typer.echo(f"  gaps (unparseable, recorded): {', '.join(result.gaps)}")
+
+
+@app.command()
+def watch(
+    repo: str = typer.Argument(..., help="Path to the git repository to watch (working or bare)."),
+    branch: str | None = typer.Option(
+        None, "--branch", help="Local branch to follow (default: the repo's HEAD branch)."
+    ),
+    interval: float = typer.Option(
+        30.0, "--interval", help="Seconds between polls of the local ref."
+    ),
+    once: bool = typer.Option(False, "--once", help="Run one tick and exit (cron/CI-friendly)."),
+    max_catchup: int = typer.Option(
+        50,
+        "--max-catchup",
+        help="Max commits to index one-by-one on catch-up; beyond this (or after a force-push), "
+        "index only the new head against the recorded cursor.",
+    ),
+    db_url: str | None = typer.Option(None, "--db-url", help="Postgres URL (else KB_DB_URL env)."),
+) -> None:
+    """Poll a LOCAL branch ref and incrementally index every new commit (Ctrl-C to stop).
+
+    No network, no credentials: pair with a bare repo receiving pushes, a cron ``git pull``, or a
+    CI step. The resume point lives in the ``branch_ref`` table, advanced per indexed commit.
+    """
+    if branch is None:
+        try:
+            branch = pygit2.Repository(repo).head.shorthand
+        except pygit2.GitError as exc:  # unborn HEAD / not a repo
+            typer.echo(f"cannot determine branch for {repo}: {exc}", err=True)
+            raise typer.Exit(1) from exc
+    engine = make_engine(db_url)
+    try:
+        run_watch(
+            engine,
+            repo,
+            branch,
+            extractors=default_extractors(),
+            interval_s=interval,
+            max_catchup=max_catchup,
+            once=once,
+            echo=typer.echo,
+        )
+    except KeyboardInterrupt:
+        typer.echo("watch stopped")
+    finally:
+        engine.dispose()
 
 
 @app.command()

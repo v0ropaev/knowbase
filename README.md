@@ -98,7 +98,7 @@ flowchart LR
 
 - **A nightly LLM-judged A/B** (optional, key-gated, **non-gating**) — an answerer LLM answers each question from knowbase's grounded context vs a RAG-over-source context, and a judge LLM scores **answer accuracy** (against hand-written gold) + **hallucination**. Tracked metrics on top of recall; it never blocks CI.
 
-**Not done yet** (and deliberately not faked): the semantic / **LLM-grounded** extraction layer, ADR mining from git history, grounded business-process extraction, incremental re-index on git push, and languages beyond Python. See the [Roadmap](#roadmap).
+**Not done yet** (and deliberately not faked): ADR mining from git history, grounded business-process extraction, and languages beyond Python. See the [Roadmap](#roadmap).
 
 ## Quickstart
 
@@ -141,6 +141,15 @@ indexed 4f1c2a9b8d3e (full): 12 files (12 parsed, 0 reused), 318 spans, 27 artif
 ```
 
 **Incremental re-index** (`--incremental`, or `--parent <sha>` which implies it) reuses the spans of files unchanged since the parent snapshot and parses only changed/new files; the extractors still run fully, so the snapshot is identical to a full re-index (a HARD gate proves it). The parent is auto-detected from the commit's parents (the first already-indexed one); a missing/unindexed parent or a first-party-root change falls back to a full index. This makes `kb index` cheap to wire to a git `post-receive` hook or a CI step: `kb index <repo> --sha <pushed> --parent <previous-head>`.
+
+### Watch a repo
+
+```bash
+uv run kb watch <repo> --branch main --interval 30 --db-url <postgres-url>
+uv run kb watch <repo> --once   # one tick and exit (cron/CI-friendly)
+```
+
+`kb watch` polls a **local** branch ref (no network, no credentials) and indexes every new first-parent commit incrementally, recording its resume point in the `branch_ref` table — the cursor advances per indexed commit, so a restart resumes where it left off. When the branch jumped further than `--max-catchup` (default 50) or was force-pushed, it indexes just the new head against the recorded cursor. Pair it with whatever moves the ref: a **bare repo receiving pushes** (run the watcher next to it), a **cron `git pull`** in a clone, or a **CI step** using `--once`. One database tracks one repository.
 
 Under the hood it runs the spine for that one commit — `INGEST → STRUCTURE → EXTRACT → SNAPSHOT`. For example, an import like `from shop.billing import charge` on line 1 of `shop/orders.py` becomes an `import_edge` artifact (`import:shop.orders->shop.billing`) grounded on the exact `import` span at that `file:line@sha`, with `span_mapping: "exact"`. **"Gaps"** are files that hit a syntax error: they are *recorded*, never silently dropped, so blind spots are visible rather than invisible.
 
@@ -230,7 +239,7 @@ A Python package `kb` (uv, src-layout). Modules and their responsibilities:
 | `kb.embed` | Replaceable embedding adapters (sentence-transformers default, OpenAI optional) + snapshot population. Torch isolated behind the `embed` extra and a lazy import. |
 | `kb.rag` | The frozen pgvector RAG-over-source baseline — the "other arm" of the knowledge-vs-RAG A/B (no provenance, no grounding). |
 | `kb.extract.semantic` | LLM-grounded extraction (`kb describe`): NL descriptions of routes/entities/modules **and per-package architecture overviews** (rich synthesis from the import graph + public surface + member summaries, grounded on code spans) with a deterministic sub-property gate (`grounding.validate_claims`) that drops any claim not backed by the target's spans. Separate key-gated pass; never on `index`. |
-| `kb.daemon.cli` | The `kb` CLI: `index` (full or `--incremental`/`--parent`), `migrate`, `embed`, `describe`, `serve` (MCP), and `introspect` — all functional. |
+| `kb.daemon.cli` | The `kb` CLI: `index` (full or `--incremental`/`--parent`), `watch` (poll a local branch ref, per-commit incremental catch-up, `branch_ref` cursor), `migrate`, `embed`, `describe`, `serve` (MCP), and `introspect` — all functional. |
 | `kb.eval` | Twelve HARD CI gates (identity reproducibility, adversarial grounding, Tier-1 import oracle, Tier-1 API oracle, Tier-1 entities oracle, Tier-1 library-surface oracle, Tier-1 events oracle, Tier-3 knowledge-vs-RAG recall, Tier-4 one-hop invalidation, invariants, semantic grounding floor, incremental re-index equivalence) plus the supporting MCP / embed / store suite. |
 
 Core tables: `commit_ref`, `branch_ref`, `code_span`, `span_occurrence`, `artifact` (now with `embedding vector(384)` + `embedding_model_id`), `artifact_derived_from`, `snapshot_entry`, and `rag_chunk` (the baseline arm).
@@ -285,7 +294,7 @@ Next milestones:
 
 - [x] **Nightly LLM-judged A/B** (key-gated, non-gating) — grounded-answer accuracy + hallucination rate on top of recall. *(shipped)*
 - [x] **LLM-grounded semantic layer** — model-backed artifacts that still carry ≥ 1 span (`extraction_method = "llm_grounded"`): `kb describe` writes span-validated descriptions for routes, entities, modules, and per-package architecture overviews. *(shipped)*
-- [~] **Incremental re-index on git push** — *core shipped*: `kb index --incremental`/`--parent` reuses unchanged files' spans from the parent snapshot (extraction stays full; equivalence is gated). A live watch/push daemon is the remaining piece.
+- [x] **Incremental re-index on git push** — `kb index --incremental`/`--parent` reuses unchanged files' spans from the parent snapshot (extraction stays full; equivalence is gated), and `kb watch` polls a local branch ref, indexing each new first-parent commit incrementally with a `branch_ref` cursor (`--max-catchup` guard, `--once` for cron/CI). *(shipped)*
 - [ ] **ADR mining** from git / PR history.
 - [ ] **Grounded business-process extraction.**
 - [ ] **More languages** beyond Python.
