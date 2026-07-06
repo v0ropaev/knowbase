@@ -212,7 +212,10 @@ flowchart TD
     EMB -.-> I7
 ```
 
-`[deferred]` recursive (artifact→artifact) invalidation, ADR mining. (EMBED + `search_knowledge` and
+`[deferred]` recursive (artifact→artifact) invalidation, ADR mining. `kb watch` is the live
+trigger over the incremental core: poll a LOCAL branch ref (no network/credentials) → index each
+new first-parent commit incrementally → advance the `branch_ref` cursor per commit (crash-safe
+resume; force-push/`--max-catchup` degrade to one explicit-parent index of the head). (EMBED + `search_knowledge` and
 the runtime openapi oracle shipped in v0.2; the oracle stays eval-only. The LLM-grounded SEMANTIC
 EXTRACT — `kb describe` — and **diff-based incremental re-index** have since shipped: `index_commit`
 can reuse the spans of files unchanged since an already-indexed parent and parse only the diff, with
@@ -355,7 +358,7 @@ freshness(current|stale@sha)`, with a deterministic tie-break for reproducible e
 | `kb.store` | Single source of truth: content-addressed spans/artifacts, provenance edges, snapshot manifests. Enforces the ≥1-derived_from invariant at write. | PostgreSQL 17, psycopg 3, SQLAlchemy Core, alembic |
 | `kb.eval` | Tiered eval; deterministic tiers gate CI. | pytest over SHA-pinned golden repos |
 | `kb.mcp` | Read-only MCP server; provenance-carrying records; budget-aware assembly. | FastMCP (pinned), Pydantic models |
-| `kb.daemon` | Orchestration + CLI: index a repo @ SHA, run extractors in order, write snapshot, host MCP. | typer |
+| `kb.daemon` | Orchestration + CLI: index a repo @ SHA (full or incremental), run extractors in order, write snapshot, host MCP; `kb watch` polls a local branch ref and indexes new first-parent commits incrementally (`branch_ref` cursor, per-commit crash-safe advance). | typer |
 | `kb.extract.semantic` | **Shipped:** `kb describe` — LLM-grounded NL descriptions of routes/entities/modules **and per-package architecture overviews** (a package grounded on its own + direct-child modules' spans; the overview synthesizes the import graph + public surface + member-module summaries as context, claims code-grounded), each claim validated against the target's spans by a deterministic sub-property gate (`grounding.validate_claims`); separate key-gated pass, never on `index`. *Deferred:* whole-repo overview; the grounded business-process extractor (entrypoints → call-graph slice → sinks → LLM labeler → span-binding validator). | thin LLM adapter (`kb.llm`); later: `PathEngine` (call-graph), YAML sink registry |
 
 ---

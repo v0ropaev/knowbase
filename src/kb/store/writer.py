@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from sqlalchemy import Connection
+from sqlalchemy import Connection, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from kb.extract.base import ExtractedArtifact
@@ -68,6 +68,21 @@ def upsert_occurrence(conn: Connection, sha: str, file_path: str, span: ParsedSp
             raw_text=span.raw_text,
         )
         .on_conflict_do_nothing(index_elements=["span_id", "sha"])
+    )
+    conn.execute(stmt)
+
+
+def upsert_branch_ref(conn: Connection, name: str, head_sha: str) -> None:
+    """Move the mutable branch pointer to ``head_sha`` (DESIGN.md §11: branches just move).
+
+    ``updated_at`` is set explicitly: the DDL default (db/0001_initial.sql) only fires on INSERT,
+    never on the DO UPDATE arm. Callers upsert only after the commit was indexed, so the
+    ``head_sha -> commit_ref`` FK is always satisfiable.
+    """
+    stmt = pg_insert(m.branch_ref).values(name=name, head_sha=head_sha, updated_at=func.now())
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["name"],
+        set_={"head_sha": stmt.excluded.head_sha, "updated_at": stmt.excluded.updated_at},
     )
     conn.execute(stmt)
 

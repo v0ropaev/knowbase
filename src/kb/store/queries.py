@@ -325,6 +325,12 @@ def package_targets(conn: Connection, sha: str) -> list[PackageTarget]:
     return targets
 
 
+def branch_head(conn: Connection, name: str) -> str | None:
+    """The recorded ``branch_ref`` cursor for ``name`` (the watch daemon's resume point)."""
+    stmt = select(m.branch_ref.c.head_sha).where(m.branch_ref.c.name == name)
+    return cast("str | None", conn.execute(stmt).scalar())
+
+
 def is_sha_indexed(conn: Connection, sha: str) -> bool:
     """True if ``sha`` has a snapshot manifest (>= 1 ``snapshot_entry``) — the witness of a real
     index. ``commit_ref`` / ``span_occurrence`` rows are written even by partial runs, so they are

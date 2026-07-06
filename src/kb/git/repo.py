@@ -31,6 +31,42 @@ def parent_shas(repo: pygit2.Repository, rev: str) -> list[str]:
     return [str(oid) for oid in resolve_commit(repo, rev).parent_ids]
 
 
+def branch_head_sha(repo: pygit2.Repository, branch: str) -> str | None:
+    """Commit sha a LOCAL branch points at (short name or full ref), or None if absent.
+
+    Uses ``references.get`` (correctly typed, works on bare repos) rather than ``branches.get``,
+    whose annotation in pygit2 1.19 claims ``Branch`` but actually returns ``None`` on a miss.
+    """
+    name = branch if branch.startswith("refs/") else f"refs/heads/{branch}"
+    ref = repo.references.get(name)
+    if ref is None:
+        return None
+    return str(ref.peel(pygit2.Commit).id)
+
+
+def first_parent_chain(
+    repo: pygit2.Repository, head_sha: str, stop_sha: str, *, limit: int
+) -> list[str] | None:
+    """The first-parent chain ``(stop_sha, head_sha]``, oldest -> newest, or ``None``.
+
+    ``None`` means ``stop_sha`` was not reached within ``limit`` commits — either the branch
+    advanced further than ``limit`` or its history no longer contains ``stop_sha`` (force-push /
+    rewind). Both get the same recovery (a single explicit-parent incremental index), so the cases
+    are deliberately collapsed rather than paying an unbounded walk to distinguish them.
+    """
+    chain: list[str] = []
+    current = head_sha
+    for _ in range(limit):
+        chain.append(current)
+        parents = parent_shas(repo, current)
+        if not parents:  # reached a root commit without meeting stop_sha
+            return None
+        current = parents[0]
+        if current == stop_sha:
+            return list(reversed(chain))
+    return None
+
+
 def iter_python_files_at(repo: pygit2.Repository, rev: str) -> Iterator[tuple[str, bytes]]:
     """Yield ``(posix_path, source_bytes)`` for every ``*.py`` blob in the tree at ``rev``."""
     commit = resolve_commit(repo, rev)
