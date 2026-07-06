@@ -4,10 +4,10 @@ Produces one ``event_handler`` artifact per HANDLER function/method that carries
 registrations: pydantic ``@field_validator(...)`` / ``@model_validator(...)`` methods, FastAPI
 ``@app.on_event("...")`` handlers, and SQLAlchemy ``@event.listens_for(Target, "...")`` listeners.
 All of a handler's registrations (stacked decorators included) live in ``payload.registrations`` —
-one artifact per handler, not per decorator, because ``artifact_id`` is content-addressed over the
-grounding spans + extractor identity ([LOCKED], ``kb.ids``): two registrations of one handler share
-the same evidence spans and would collide as separate artifacts. The handler is the grounded unit;
-its registrations are payload facts (the entity-fields precedent).
+one artifact per handler, not per decorator: the handler is the grounded unit and its registrations
+are payload facts (the entity-fields precedent). (Historically this also dodged an identity-v1
+collision for same-evidence artifacts; identity rule v2 folds ``logical_key`` into ``artifact_id``,
+so the aggregation is now purely a design choice.)
 
 Grounded on the handler span (role ``handler`` — the span includes its decorators), plus the
 enclosing model class (role ``owner_class``, pydantic) and every resolved listened-to class (role

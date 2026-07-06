@@ -49,7 +49,7 @@ The core invariant: **nothing is stored unless it is bound to ≥ 1 exact code s
 
 Identity is **content-addressed and location-free by construction**. A span's `span_id` is a `sha256` over `(normalization_version, lang, span_kind, fq_symbol_path, structural_fingerprint)` — no file path, no byte offsets. The structural fingerprint is a normalized S-expression of the tree-sitter parse (named nodes only; comments *and* docstrings dropped; identifiers and literals kept). So reformatting, moving a file, or editing a comment does **not** change identity; a real rename or a structural edit does. Location is recorded per-SHA in `span_occurrence`, separate from identity.
 
-Artifacts are content-addressed the same way — over their byte-sorted, de-duplicated grounding spans plus `extractor_id`/`extractor_version` (and `prompt_version`/`model_id` for model-backed extractors). Re-indexing the same commit reproduces the identical set of artifact ids.
+Artifacts are content-addressed the same way — over their byte-sorted, de-duplicated grounding spans plus the `logical_key` and `extractor_id`/`extractor_version` (and `prompt_version`/`model_id` for model-backed extractors). The `logical_key` is part of the identity so that two different knowledge units sharing their entire evidence set (mutually referencing entities, mutually recursive callers) can never collapse into one digest. Re-indexing the same commit reproduces the identical set of artifact ids.
 
 The spine is a handful of content-addressed tables: each **artifact** carries ≥ 1 `derived_from` edge to a **code_span**, spans are located **per-SHA** in `span_occurrence`, and a per-SHA **snapshot** ties the grounded artifacts to a commit.
 
