@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Silent artifact_id collision for same-evidence artifacts**: `artifact_id` (identity rule v1)
+  hashed the grounding span set + extractor identity but NOT the `logical_key`, so two different
+  knowledge units of one extractor sharing their entire evidence set collided into one digest —
+  e.g. mutually referencing entities (`Order.items: list[LineItem]` ↔ `LineItem.order: Order`)
+  produced ONE artifact and the second logical key silently served the first payload. The same
+  latent class affected FastAPI routes stacked on one handler+response-model and would have blocked
+  the call-graph extractor (mutual recursion). Adversarial regression added to the Tier-1 entities
+  gate (mutual cross-file refs → two distinct, correctly-payloaded, cross-file-grounded artifacts)
+  plus identity-rule assertions in the invariants gate.
+
+### Changed
+
+- **Artifact identity rule v2** (`kb.ids`, per the [LOCKED] block's own evolution protocol):
+  `logical_key` joined the `artifact_id` hash, versioned by a new `ARTIFACT_ID_VERSION` constant
+  (the artifact-side mirror of `NORMALIZATION_VERSION`) — extractor versions stay semantic.
+  Same-input reproducibility and cross-branch dedup are unaffected. **All artifact ids change**:
+  existing databases should be re-indexed (`kb index` rewrites snapshots idempotently; superseded
+  artifact rows are orphaned — GC remains deferred, harmless).
+
 ### Added
 
 - **`kb watch` — incremental re-index daemon** (`kb.daemon.watch`), completing the "incremental

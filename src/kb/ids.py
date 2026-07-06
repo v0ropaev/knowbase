@@ -18,6 +18,12 @@ from collections.abc import Iterable, Mapping
 # Bump when any span-identity rule (here or in kb.structural.fingerprint / symbol_path) changes.
 NORMALIZATION_VERSION = 1
 
+# Bump when the ARTIFACT-identity rule below changes. v2: ``logical_key`` joined the hash — v1
+# derived identity from spans + extractor only, so two DIFFERENT artifacts of one extractor with
+# the same evidence set (mutual entity references, mutually recursive callers) silently collided
+# into one artifact_id and the second payload was lost on write.
+ARTIFACT_ID_VERSION = 2
+
 # ASCII Unit Separator — an unambiguous field boundary inside hashed input. Binary components are
 # hex-encoded before hashing so a raw 0x1f byte in a digest can never be mistaken for a separator.
 SEP = b"\x1f"
@@ -59,6 +65,7 @@ def canonical_framework_versions(framework_versions: Mapping[str, str] | None) -
 def compute_artifact_id(
     *,
     derived_from_span_ids: Iterable[bytes],
+    logical_key: str,
     extractor_id: str,
     extractor_version: str,
     prompt_version: str = "",
@@ -68,21 +75,26 @@ def compute_artifact_id(
     """The content-addressed identity of a knowledge artifact (DESIGN.md §6). 32-byte sha256 digest.
 
     ``derived_from_span_ids`` are byte-sorted and de-duplicated so order of derivation is
-    irrelevant. ``prompt_version``/``model_id`` are '' for deterministic extractors;
-    ``framework_versions`` is included only where output depends on it (NOT the import graph).
-    Raises ``ValueError`` if there are no derived-from spans — the anti-hallucination invariant
-    enforced at the identity layer, mirroring the DB constraint trigger.
+    irrelevant. ``logical_key`` is part of the identity (rule v2, ``ARTIFACT_ID_VERSION``): two
+    distinct knowledge units of one extractor may share their entire evidence set — mutually
+    referencing entities, mutually recursive callers — and must not collapse into one digest.
+    ``prompt_version``/``model_id`` are '' for deterministic extractors; ``framework_versions`` is
+    included only where output depends on it (NOT the import graph). Raises ``ValueError`` if there
+    are no derived-from spans — the anti-hallucination invariant enforced at the identity layer,
+    mirroring the DB constraint trigger.
     """
     sorted_ids = sorted(set(derived_from_span_ids))
     if not sorted_ids:
         raise ValueError("artifact must derive from >= 1 span (anti-hallucination invariant)")
     h = hashlib.sha256()
+    h.update(str(ARTIFACT_ID_VERSION).encode("utf-8"))
+    h.update(SEP)
     h.update(str(len(sorted_ids)).encode("utf-8"))
     h.update(SEP)
     for span_id in sorted_ids:
         h.update(span_id.hex().encode("utf-8"))
         h.update(SEP)
-    for field in (extractor_id, extractor_version, prompt_version, model_id):
+    for field in (logical_key, extractor_id, extractor_version, prompt_version, model_id):
         h.update(field.encode("utf-8"))
         h.update(SEP)
     h.update(canonical_framework_versions(framework_versions))

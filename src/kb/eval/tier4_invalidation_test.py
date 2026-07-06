@@ -61,9 +61,15 @@ def test_no_diff_invalidates_nothing(engine: Engine, tmp_path: Path) -> None:
 def test_version_bump_changes_artifact_id() -> None:
     span = bytes([0x01]) * 32
     v1 = compute_artifact_id(
-        derived_from_span_ids=[span], extractor_id="imports", extractor_version="1"
+        derived_from_span_ids=[span],
+        logical_key="import:a->b",
+        extractor_id="imports",
+        extractor_version="1",
     )
     v2 = compute_artifact_id(
-        derived_from_span_ids=[span], extractor_id="imports", extractor_version="2"
+        derived_from_span_ids=[span],
+        logical_key="import:a->b",
+        extractor_id="imports",
+        extractor_version="2",
     )
     assert v1 != v2  # a version bump fully invalidates (every id changes)

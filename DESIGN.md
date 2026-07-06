@@ -137,13 +137,20 @@ and "exact `file:line@sha` provenance" both correct simultaneously.
 ### Artifact identity
 ```
 artifact_id = sha256(
+    artifact_id_version ||            # bumped when THIS rule changes (mirror of NORMALIZATION_VERSION)
     canonical(sorted derived_from span_ids) ||
+    logical_key ||                    # rule v2 (bug-fix): distinct units may share their entire span set
     extractor_id || extractor_version ||
     prompt_version ||                 # '' for deterministic extractors
     model_id ||                       # '' for deterministic; REQUIRED for llm_grounded  ← review fix
     framework_versions_subset         # only for extractors whose output depends on it (API/entity), NOT imports
 )
 ```
+- **Rule v2 (`ARTIFACT_ID_VERSION = 2`)**: `logical_key` joined the hash. v1 derived identity from
+  spans + extractor only, so two DIFFERENT artifacts of one extractor sharing their whole evidence
+  set — mutually referencing entities (`Order ↔ LineItem`), stacked registrations, mutually
+  recursive callers — silently collided into one digest and the second payload was lost on write.
+  Same-input reproducibility and cross-branch dedup are unaffected (same key + same spans ⇒ same id).
 - Identical inputs on **any** branch/commit collapse to the **same** `artifact_id` → free
   dedup and free "branch inheritance" without an inheritance protocol. An unchanged span on a
   new branch re-hashes to the existing artifact and is simply **re-pointed**, never recomputed

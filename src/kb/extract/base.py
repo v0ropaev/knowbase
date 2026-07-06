@@ -43,6 +43,7 @@ class ExtractedArtifact:
         """The content-addressed id (raises if there are no derived-from spans)."""
         return compute_artifact_id(
             derived_from_span_ids=[edge.span_id for edge in self.derived_from],
+            logical_key=self.logical_key,
             extractor_id=self.extractor_id,
             extractor_version=self.extractor_version,
             prompt_version=self.prompt_version,

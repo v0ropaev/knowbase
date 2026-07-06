@@ -158,3 +158,58 @@ def test_cross_file_entity_links_grounded(engine: Engine, tmp_path: Path) -> Non
     cart = next(p for p in _entity_payloads(engine, sha) if p["qualified_name"] == "shop.cart.Cart")
     related = {(r["name"], r["target_fq"], r["via"]) for r in cart["related_entities"]}
     assert ("Order", "shop.models.Order", "field_type") in related
+
+
+# --- identity v2 regression: mutually referencing entities (same evidence span set) ------------
+
+# `Order` and `Item` reference EACH OTHER across files, so both entity artifacts are grounded on
+# the identical pair of class spans. Under identity rule v1 (no logical_key in the hash) they
+# collided into ONE artifact_id and the second payload was silently lost; rule v2 must keep them
+# distinct while preserving the cross-file grounding of both.
+MUTUAL_FILES = {
+    "src/mrefs/__init__.py": "",
+    "src/mrefs/a.py": (
+        "from pydantic import BaseModel\n\n\n"
+        "class MOrder(BaseModel):\n"
+        "    items: list['MItem']\n"
+    ),
+    "src/mrefs/b.py": (
+        "from pydantic import BaseModel\n"
+        "from mrefs.a import MOrder\n\n\n"
+        "class MItem(BaseModel):\n"
+        "    order: 'MOrder'\n"
+    ),
+}
+
+
+def test_mutual_refs_yield_distinct_artifacts(engine: Engine, tmp_path: Path) -> None:
+    sha = make_git_repo(tmp_path, [MUTUAL_FILES])[0]
+    index_commit(engine, str(tmp_path), sha, extractors=[EntityExtractor()], first_party_root="src")
+
+    join = m.snapshot_entry.join(
+        m.artifact, m.artifact.c.artifact_id == m.snapshot_entry.c.artifact_id
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(
+                m.snapshot_entry.c.logical_key,
+                m.snapshot_entry.c.artifact_id,
+                m.artifact.c.payload,
+            )
+            .select_from(join)
+            .where(m.snapshot_entry.c.sha == sha, m.artifact.c.kind == "entity")
+        ).all()
+
+    by_key = {r.logical_key: r for r in rows}
+    assert set(by_key) == {"entity:mrefs.a.MOrder", "entity:mrefs.b.MItem"}  # both survive
+    ids = {bytes(r.artifact_id) for r in rows}
+    assert len(ids) == 2  # DISTINCT artifact ids despite the identical evidence span set
+    # each logical key serves ITS OWN payload (the v1 bug served one payload for both keys)
+    assert by_key["entity:mrefs.a.MOrder"].payload["class_name"] == "MOrder"
+    assert by_key["entity:mrefs.b.MItem"].payload["class_name"] == "MItem"
+
+    # the cross-file grounding is preserved on both sides
+    with engine.connect() as conn:
+        for key in by_key:
+            files = {p.file_path for p in provenance_for_artifact(conn, sha, key)}
+            assert files == {"src/mrefs/a.py", "src/mrefs/b.py"}
