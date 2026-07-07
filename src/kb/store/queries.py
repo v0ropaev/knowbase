@@ -235,6 +235,47 @@ def spans_for_artifact(conn: Connection, sha: str, logical_key: str) -> list[Art
 
 
 @dataclass(frozen=True)
+class ChangedSpanRow:
+    span_id: bytes
+    fq_symbol_path: str
+    raw_text: str  # the span's source text at this sha
+    file_path: str
+    start_line: int
+
+
+def changed_span_rows(
+    conn: Connection, sha: str, span_ids: Collection[bytes] | None
+) -> list[ChangedSpanRow]:
+    """Snapshot spans at ``sha`` filtered to ``span_ids`` (``None`` = every span — root commits).
+
+    Feeds the ADR miner (DESIGN.md §4): the spans a commit changed are both the prompt context and
+    the deterministic ground truth its claims validate against — the same §9 floor as describe.
+    """
+    if span_ids is not None and not span_ids:
+        return []
+    join = m.code_span.join(m.span_occurrence, m.span_occurrence.c.span_id == m.code_span.c.span_id)
+    stmt = (
+        select(
+            m.code_span.c.span_id,
+            m.code_span.c.fq_symbol_path,
+            m.span_occurrence.c.raw_text,
+            m.span_occurrence.c.file_path,
+            m.span_occurrence.c.start_line,
+        )
+        .select_from(join)
+        .where(m.span_occurrence.c.sha == sha)
+        .order_by(
+            m.span_occurrence.c.file_path,
+            m.span_occurrence.c.start_line,
+            m.code_span.c.fq_symbol_path,
+        )
+    )
+    if span_ids is not None:
+        stmt = stmt.where(m.code_span.c.span_id.in_(list(span_ids)))
+    return [ChangedSpanRow(*row) for row in conn.execute(stmt).all()]
+
+
+@dataclass(frozen=True)
 class ModuleTarget:
     module: str  # the file's module span fq path (e.g. "app.schemas")
     file_path: str

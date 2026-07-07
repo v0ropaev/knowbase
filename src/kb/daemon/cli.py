@@ -1,7 +1,8 @@
 """The ``kb`` command-line interface (DESIGN.md §11).
 
 ``kb index`` runs the spine for one commit; ``watch`` polls a local branch ref and indexes new
-commits incrementally; ``migrate`` applies the schema; ``embed`` populates embeddings; ``serve``
+commits incrementally; ``migrate`` applies the schema; ``embed`` populates embeddings;
+``describe`` and ``mine`` are the key-gated LLM passes (descriptions / ADR candidates); ``serve``
 hosts the read-only MCP server over stdio; ``introspect`` is the eval-only sandboxed FastAPI
 openapi oracle.
 """
@@ -164,6 +165,49 @@ def describe(
         result = describe_snapshot(engine, target, provider)
         typer.echo(
             f"described {result.described} artifacts (dropped {result.dropped_claims} claims) "
+            f"@ {target[:12]} with {provider.model_id}"
+        )
+    finally:
+        engine.dispose()
+
+
+@app.command()
+def mine(
+    repo: str = typer.Argument(..., help="Path to the git repository the snapshots came from."),
+    db_url: str | None = typer.Option(None, "--db-url", help="Postgres URL (else KB_DB_URL env)."),
+    sha: str | None = typer.Option(
+        None, "--sha", help="Commit-ish to start the first-parent walk from (def: latest indexed)."
+    ),
+    max_commits: int = typer.Option(
+        20, "--max-commits", help="Max commits to walk (each mined commit is one LLM call)."
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Re-mine commits that already carry a decision artifact."
+    ),
+) -> None:
+    """Mine ADR candidates from local git history (separate key-gated pass; never on `index`)."""
+    from kb.extract.semantic.mine import mine_history  # lazy: keeps the LLM off other cmds
+    from kb.llm.providers import default_llm_provider, has_llm_key
+    from kb.store.queries import latest_ingested_sha
+
+    if not has_llm_key():
+        typer.echo("no LLM API key (set ANTHROPIC_API_KEY or OPENAI_API_KEY)")
+        raise typer.Exit(code=1)
+    engine = make_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            target = sha or latest_ingested_sha(conn)
+        if target is None:
+            typer.echo("no indexed snapshot to mine from")
+            raise typer.Exit(code=1)
+        provider = default_llm_provider()
+        result = mine_history(
+            engine, repo, provider, start_sha=target, max_commits=max_commits, force=force
+        )
+        typer.echo(
+            f"mined {result.mined} decisions from {result.scanned} commits "
+            f"(dropped {result.dropped_claims} claims; skipped {result.skipped_merges} merges, "
+            f"{result.skipped_unindexed} unindexed, {result.skipped_already_mined} already mined) "
             f"@ {target[:12]} with {provider.model_id}"
         )
     finally:

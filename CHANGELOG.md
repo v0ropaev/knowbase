@@ -5,6 +5,36 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **ADR-candidate mining from git history — slice 1** (`kb mine`,
+  `kb.extract.semantic.mine`): a new key-gated LLM pass (separate from `kb index`, mirror of
+  `kb describe`) that walks the local first-parent history from the latest indexed commit
+  (`--sha` / `--max-commits` / `--force`) and extracts the *decision* each commit records from
+  its message plus its changed code. The D5 grounding bridge: each `decision` artifact
+  (`decision:{sha}`, one per mined commit — deterministic, no LLM slugs) is grounded on the
+  spans its source commit **changed** (present at the commit, absent at its first parent; role
+  `changed`; root commits mine against the empty tree), so prose-born knowledge still satisfies
+  the ≥ 1-code-span invariant. The commit message is stored *verbatim* in the payload as a fact
+  (immutable, pinned by the sha) — context, never grounding. Claims pass the same deterministic
+  `validate_claims` floor as `kb describe` (fabricated claims dropped; no survivors → nothing
+  stored), `confidence = kept/(kept+dropped)`, trust stays LOW (DESIGN §4). Merge commits are
+  skipped (PR-description mining is a future network slice), unindexed commits are skipped,
+  docs-only commits never pay an LLM call, oversized grounding sets are capped with a retro-flag
+  (`grounding_capped`), and re-running skips already-mined commits (LLM-cost idempotency; one
+  transaction per commit, crash-safe). New `store.queries.changed_span_rows`;
+  `summarize`/`embed_text` gained a `decision` branch; `make_git_repo` fixtures accept
+  per-commit `messages`.
+- **ADR-mining HARD gate** (`kb.eval.adr_mining_test`): stub-LLM (offline, no API key),
+  four-commit fixture with decision-bearing messages — grounded claim kept / adversarial
+  fabricated claim dropped; provenance limited to the commit's touched files; root commit
+  grounded on the whole initial tree; a commit whose changed code backs no claim stores
+  nothing; docs-only commit provably skips the LLM; merges skipped; re-mining idempotent
+  (same artifact ids, stored decisions never re-billed). Headline HARD gates: fourteen →
+  **fifteen**.
+
 ## [0.6.0] - 2026-07-07
 
 ### Added
