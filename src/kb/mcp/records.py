@@ -90,6 +90,12 @@ def summarize(kind: str, payload: dict[str, Any]) -> str:
         suffix = f" +{len(regs) - 1} more" if len(regs) > 1 else ""
         family = first.get("family", "?")
         return f"{payload.get('handler', '?')} on {target}:{trigger} ({family}{suffix})"
+    if kind == "call_edge":
+        n = len(payload.get("lines", []))
+        return (
+            f"{payload.get('caller', '?')} -> {payload.get('callee', '?')} "
+            f"({payload.get('resolution', '?')}, {n} sites)"
+        )
     if kind == "description":
         summary = str(payload.get("summary", "")).strip().splitlines()
         return summary[0] if summary else f"description of {payload.get('target_logical_key', '?')}"

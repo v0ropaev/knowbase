@@ -254,6 +254,12 @@ test.)
   artifact per handler because `artifact_id` is content-addressed over spans + extractor, §6).
   Grounded on the handler span + cross-file on the listened-to class; hand-labeled Tier-1 gate.
   Known gaps (asserted): call-form `event.listen(...)`, lifespan, pydantic-v1, dynamic names.
+- **(e)** Call-graph edge extractor *(shipped)*: one `call_edge` per RESOLVED caller→callee pair,
+  three deterministic tiers (same-module; imported — **cross-file**; `self.` method of the same
+  class); precision-first — only first-party-resolved edges are emitted, recall bounded by
+  documented gaps (dynamic/attribute calls, inheritance); grounded on caller + callee def spans;
+  hand-labeled Tier-1 gate incl. a mutual-recursion identity-v2 regression. The deterministic
+  foundation for §14 item 2.
 - Single Postgres with the `≥1 derived_from` invariant enforced at write.
 - **Adversarial fixture:** an ungrounded artifact that the write-time check **must reject** —
   so the anti-hallucination discipline is tested in the MVP, not deferred with the LLM.
@@ -357,7 +363,7 @@ freshness(current|stale@sha)`, with a deterministic tie-break for reproducible e
 | Module | Responsibility | Key tech |
 |--------|----------------|----------|
 | `kb.structural` | Parse Python without executing it; enumerate symbols/imports/call-sites with per-SHA byte/line ranges; compute content-addressed span identity; incremental reparse. Hidden behind a `StructuralIndex`/`PathEngine` interface so a SCIP backend can replace tree-sitter later. | tree-sitter + tree-sitter-python (canonical bindings) |
-| `kb.extract.deterministic` | No-LLM extractors → exact artifacts (confidence=1.0): import graph; FastAPI API contract (static, cross-file grounded); domain entities (pydantic/dataclass/SQLAlchemy, static, cross-file links to referenced entities, hand-labeled gate); library public-API surface (static tree-sitter, cross-file `__init__` re-export resolution, independent griffe-oracle gate); event handlers (pydantic validators / FastAPI `on_event` / SQLAlchemy `listens_for`, static, cross-file target grounding, hand-labeled gate). | grimp, tree-sitter queries; griffe (dev-only oracle) |
+| `kb.extract.deterministic` | No-LLM extractors → exact artifacts (confidence=1.0): import graph; FastAPI API contract (static, cross-file grounded); domain entities (pydantic/dataclass/SQLAlchemy, static, cross-file links to referenced entities, hand-labeled gate); library public-API surface (static tree-sitter, cross-file `__init__` re-export resolution, independent griffe-oracle gate); event handlers (pydantic validators / FastAPI `on_event` / SQLAlchemy `listens_for`, static, cross-file target grounding, hand-labeled gate); call-graph edges (per-edge artifacts, three resolution tiers, caller+callee span grounding, hand-labeled gate). | grimp, tree-sitter queries; griffe (dev-only oracle) |
 | `kb.introspect` | Eval-only runtime oracle: runs a FastAPI app in a network-blocked sandbox and emits `app.openapi()` for the Tier-1 API gate. Never on the index path. | subprocess sandbox, fastapi |
 | `kb.embed` | Replaceable embedding adapters + snapshot population for `search_knowledge`. Torch isolated behind the `embed` extra and a lazy import. | sentence-transformers (default), OpenAI (optional), pgvector |
 | `kb.rag` | Frozen pgvector RAG-over-source baseline — the "other arm" of the knowledge-vs-RAG A/B (no provenance/grounding). | deterministic line-window chunker, pgvector |
@@ -404,6 +410,10 @@ Review fact-checked these against current (2026) sources. Caveats are first-clas
   velocity, small team, no tagged GitHub releases (v0.6.6 is the npm version), needs Node + an
   activated venv, and the Python consumer will likely compile the `.proto` itself. This
   *strengthens* keeping it deferred behind an interface.
+- The shipped deterministic `call_edge` extractor takes the tree-sitter-call-sites road: it emits
+  **only resolved** edges (precision-first) with recall bounded by documented gaps (dynamic
+  dispatch, attribute calls, inheritance) — the "always quote recall, not just precision" rule;
+  PyCG-class resolvers stay deferred behind `PathEngine`.
 - **PyCG (call graph, deferred semantic layer)** — **archived/unmaintained**; ~99% precision is
   paired with only **~70% recall** (≈30% of real edges missed → "incomplete path" is the common
   case). Treat as a known-temporary default strictly behind `PathEngine`; evaluate maintained
@@ -442,7 +452,9 @@ Review fact-checked these against current (2026) sources. Caveats are first-clas
    pydantic/FastAPI/SQLAlchemy, static tree-sitter, hand-labeled Tier-1 gate; call-form
    `event.listen` deferred).
 2. The **one** grounded business-process extractor (named real path + labeler + validator +
-   deterministic sub-property gate).
+   deterministic sub-property gate). *Deterministic foundation shipped:* the `call_edge` extractor
+   + Tier-1 calls gate; `PathEngine` slicing, the sink registry, the labeler and the span-binding
+   validator are next.
 3. Recursive invalidation (`artifact_depends_on`), multi-branch dedup, freshness precompute.
 4. Embeddings + `search_knowledge` *(shipped v0.2)*; then `pg_search`/BM25 + RRF if vector ranking is insufficient.
 5. ADR mining from git/PR history.
