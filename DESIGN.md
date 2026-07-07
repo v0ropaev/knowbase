@@ -1,6 +1,6 @@
 # knowbase — Design
 
-> Status: **agreed MVP design**, implemented through **v0.4**. This document is the source of truth
+> Status: **agreed MVP design**, implemented through **v0.5**. This document is the source of truth
 > for the architecture. It supersedes the original free-form spec. Load-bearing decisions that are
 > expensive to change later are marked **[LOCKED]**; everything else is revisable. The MVP vertical
 > slice in §8 has shipped (provenance spine, import + FastAPI + domain-entity + library-surface
