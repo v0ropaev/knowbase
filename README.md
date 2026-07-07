@@ -92,13 +92,13 @@ flowchart LR
 - **Read-only MCP server** — `find_provenance`, `get_knowledge`, and `search_knowledge`, each returning provenance-carrying units (method + confidence + freshness).
 - **pgvector embeddings + semantic search** — a replaceable embedding provider (sentence-transformers by default, OpenAI optional) populated by a separate `kb embed` pass; torch stays out of the index path.
 - **A frozen RAG-over-source baseline** and the **Tier-3 knowledge-vs-RAG recall gate** — the honest A/B that backs the "knowledge > RAG" thesis.
-- **LLM-grounded descriptions** — an optional, key-gated `kb describe` pass has an LLM write NL summaries for routes, entities, modules (per file), and **packages** (a per-package architecture overview that synthesizes the import graph + public surface + member-module summaries, grounded on the package's own and its direct submodules' spans); every claim is validated against the target's own spans by a deterministic sub-property gate, so ungrounded claims are *dropped* (the anti-hallucination invariant, with a model in the loop). Stored as `extraction_method = "llm_grounded"`, grounded on code spans.
+- **LLM-grounded descriptions** — an optional, key-gated `kb describe` pass has an LLM write NL summaries for routes, entities, modules (per file), **packages** (a per-package architecture overview that synthesizes the import graph + public surface + member-module summaries, grounded on the package's own and its direct submodules' spans), and **business-process paths** (each materialized `process_path` chain gets an LLM-written label grounded on every span along the path, with a confidence that honestly stays < 1.0); every claim is validated against the target's own spans by a deterministic sub-property gate, so ungrounded claims are *dropped* (the anti-hallucination invariant, with a model in the loop). Stored as `extraction_method = "llm_grounded"`, grounded on code spans.
 - **Incremental re-index** — `kb index --parent <sha>` reuses unchanged files' spans from the parent snapshot and parses only the diff; extraction stays full, so the result is identical to a full re-index (a HARD gate proves it). Auto-detects the parent; falls back to full when none is indexed.
 - **Fourteen HARD CI eval gates** (see [Development](#development)).
 
 - **A nightly LLM-judged A/B** (optional, key-gated, **non-gating**) — an answerer LLM answers each question from knowbase's grounded context vs a RAG-over-source context, and a judge LLM scores **answer accuracy** (against hand-written gold) + **hallucination**. Tracked metrics on top of recall; it never blocks CI.
 
-**Not done yet** (and deliberately not faked): ADR mining from git history, the LLM labeling of business-process paths, and languages beyond Python. See the [Roadmap](#roadmap).
+**Not done yet** (and deliberately not faked): ADR mining from git history and languages beyond Python. See the [Roadmap](#roadmap).
 
 ## Quickstart
 
@@ -167,7 +167,7 @@ uv run kb embed --db-url <postgres-url>   # separate pass: populate artifact emb
 uv run kb describe --db-url <postgres-url>   # separate, key-gated pass (ANTHROPIC_API_KEY / OPENAI_API_KEY)
 ```
 
-`kb describe` has an LLM (via `kb.llm`, `KB_LLM_PROVIDER` in {`anthropic`,`openai`}) write a short NL summary + structured claims for each route, entity, module (per file), and **package** (a per-package architecture overview, grounded on the package's own and its direct submodules' spans, synthesizing the import graph + public surface + member-module summaries as context) in the latest snapshot. **Every claim is validated against that target's own grounding spans** — claims citing a symbol not in the code are dropped, and a `description` artifact is stored only if something survives, grounded on those code spans (`extraction_method = "llm_grounded"`). It needs an API key, never runs on `kb index`, and the deterministic grounding gate is exercised in CI without a key (stub LLM).
+`kb describe` has an LLM (via `kb.llm`, `KB_LLM_PROVIDER` in {`anthropic`,`openai`}) write a short NL summary + structured claims for each route, entity, module (per file), **package** (a per-package architecture overview, grounded on the package's own and its direct submodules' spans, synthesizing the import graph + public surface + member-module summaries as context), and **business-process path** (a grounded NL label for the deterministic `process_path` chain, grounded on every span along the path) in the latest snapshot. **Every claim is validated against that target's own grounding spans** — claims citing a symbol not in the code are dropped, and a `description` artifact is stored only if something survives, grounded on those code spans (`extraction_method = "llm_grounded"`). It needs an API key, never runs on `kb index`, and the deterministic grounding gate is exercised in CI without a key (stub LLM).
 
 ### Serve to an AI agent (MCP)
 
@@ -240,7 +240,7 @@ A Python package `kb` (uv, src-layout). Modules and their responsibilities:
 | `kb.mcp` | Read-only MCP server and its provenance-carrying records: `find_provenance`, `get_knowledge`, `search_knowledge`. |
 | `kb.embed` | Replaceable embedding adapters (sentence-transformers default, OpenAI optional) + snapshot population. Torch isolated behind the `embed` extra and a lazy import. |
 | `kb.rag` | The frozen pgvector RAG-over-source baseline — the "other arm" of the knowledge-vs-RAG A/B (no provenance, no grounding). |
-| `kb.extract.semantic` | LLM-grounded extraction (`kb describe`): NL descriptions of routes/entities/modules **and per-package architecture overviews** (rich synthesis from the import graph + public surface + member summaries, grounded on code spans) with a deterministic sub-property gate (`grounding.validate_claims`) that drops any claim not backed by the target's spans. Separate key-gated pass; never on `index`. |
+| `kb.extract.semantic` | LLM-grounded extraction (`kb describe`): NL descriptions of routes/entities/modules, **per-package architecture overviews** (rich synthesis from the import graph + public surface + member summaries, grounded on code spans), **and business-process-path labels** (one per `process_path`, grounded on every span along the path) with a deterministic sub-property gate (`grounding.validate_claims`) that drops any claim not backed by the target's spans. Separate key-gated pass; never on `index`. |
 | `kb.daemon.cli` | The `kb` CLI: `index` (full or `--incremental`/`--parent`), `watch` (poll a local branch ref, per-commit incremental catch-up, `branch_ref` cursor), `migrate`, `embed`, `describe`, `serve` (MCP), and `introspect` — all functional. |
 | `kb.eval` | Fourteen HARD CI gates (identity reproducibility, adversarial grounding, Tier-1 import oracle, Tier-1 API oracle, Tier-1 entities oracle, Tier-1 library-surface oracle, Tier-1 events oracle, Tier-1 call-graph oracle, Tier-1 process-paths oracle, Tier-3 knowledge-vs-RAG recall, Tier-4 one-hop invalidation, invariants, semantic grounding floor, incremental re-index equivalence) plus the supporting MCP / embed / store suite. |
 
@@ -300,7 +300,7 @@ Next milestones:
 - [x] **LLM-grounded semantic layer** — model-backed artifacts that still carry ≥ 1 span (`extraction_method = "llm_grounded"`): `kb describe` writes span-validated descriptions for routes, entities, modules, and per-package architecture overviews. *(shipped)*
 - [x] **Incremental re-index on git push** — `kb index --incremental`/`--parent` reuses unchanged files' spans from the parent snapshot (extraction stays full; equivalence is gated), and `kb watch` polls a local branch ref, indexing each new first-parent commit incrementally with a `branch_ref` cursor (`--max-catchup` guard, `--once` for cron/CI). *(shipped)*
 - [ ] **ADR mining** from git / PR history.
-- [~] **Grounded business-process extraction** — *deterministic path extraction shipped*: `process_path` artifacts (entrypoint → call chain → sink-registry match, multi-file grounding). LLM labeling + span-binding validator are the remaining piece.
+- [x] **Grounded business-process extraction** — `process_path` artifacts (entrypoint → call chain → sink-registry match, multi-file grounding) plus LLM labeling via `kb describe` (a span-validated NL label per path, grounded on the path's own spans, confidence honestly < 1.0). *(shipped)*
 - [ ] **More languages** beyond Python.
 
 ## Contributing

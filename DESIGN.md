@@ -343,8 +343,14 @@ rejected. **Verbalized LLM confidence is never used as the score.**
 > construction** — every sink claim IS a registry match on the materialized path and every endpoint
 > IS an extracted entrypoint. Their `confidence` is 1.0: a found path is machine-checked exact (the
 > `call_edge` precedent); the unknown-unknowns of the bounded-recall call graph are priced into the
-> FUTURE LLM-labeled process artifact (confidence < 1.0 there), with incompleteness carried as
+> LLM-labeled process artifact (confidence < 1.0 there), with incompleteness carried as
 > explicit payload facts here, never a fudged scalar.
+>
+> *Implemented (LLM labeling):* `kb describe` now labels each `process_path` as a fourth describe
+> slice — the label's claims validate against the path's own spans (fabricated claims dropped; a
+> path with no surviving claim stores nothing), and the stored description ships with
+> `confidence = kept / (kept + dropped)` < 1.0, as promised above. Gated in
+> `semantic_grounding_test` on the stub LLM (no API key), adversarial fabricated claim included.
 
 ---
 
@@ -459,10 +465,11 @@ Review fact-checked these against current (2026) sources. Caveats are first-clas
    pydantic/FastAPI/SQLAlchemy, static tree-sitter, hand-labeled Tier-1 gate; call-form
    `event.listen` deferred).
 2. The **one** grounded business-process extractor (named real path + labeler + validator +
-   deterministic sub-property gate). *Deterministic foundation shipped:* the `call_edge` extractor
-   + Tier-1 calls gate, and now the `process_path` builder (PathEngine BFS + sink registry +
-   `.kb/sinks.yaml` override, multi-file grounded paths, Tier-1 processes gate). The LLM labeler
-   and the span-binding validator are next.
+   deterministic sub-property gate) — **shipped**: the `call_edge` extractor + Tier-1 calls gate;
+   the `process_path` builder (PathEngine BFS + sink registry + `.kb/sinks.yaml` override,
+   multi-file grounded paths, Tier-1 processes gate); and the LLM labeler (`kb describe`'s
+   `process_path` slice — span validation against the path's own spans IS the binding validator,
+   gated in `semantic_grounding_test`).
 3. Recursive invalidation (`artifact_depends_on`), multi-branch dedup, freshness precompute.
 4. Embeddings + `search_knowledge` *(shipped v0.2)*; then `pg_search`/BM25 + RRF if vector ranking is insufficient.
 5. ADR mining from git/PR history.
