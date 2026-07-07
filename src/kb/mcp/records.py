@@ -105,6 +105,11 @@ def summarize(kind: str, payload: dict[str, Any]) -> str:
     if kind == "description":
         summary = str(payload.get("summary", "")).strip().splitlines()
         return summary[0] if summary else f"description of {payload.get('target_logical_key', '?')}"
+    if kind == "decision":
+        headline = str(payload.get("summary", "")).strip().splitlines()
+        fallback = str(payload.get("message", "")).strip().splitlines()
+        text = headline[0] if headline else (fallback[0] if fallback else "?")
+        return f"decision @ {str(payload.get('sha', '?'))[:12]}: {text}"
     return kind
 
 

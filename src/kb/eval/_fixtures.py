@@ -14,12 +14,20 @@ import pygit2
 _SIG = pygit2.Signature("knowbase-test", "test@knowbase.local", time=1_700_000_000, offset=0)
 
 
-def make_git_repo(path: Path, commits: list[dict[str, str]]) -> list[str]:
-    """Create a repo at ``path`` with one commit per mapping; return the ordered list of SHAs."""
+def make_git_repo(
+    path: Path, commits: list[dict[str, str]], *, messages: list[str] | None = None
+) -> list[str]:
+    """Create a repo at ``path`` with one commit per mapping; return the ordered list of SHAs.
+
+    ``messages`` supplies one commit message per mapping (ADR-mining fixtures feed on them);
+    omitted, every commit keeps the historical ``"commit"`` placeholder.
+    """
+    if messages is not None and len(messages) != len(commits):
+        raise ValueError("messages must match commits one-to-one")
     repo = pygit2.init_repository(str(path), bare=False)
     shas: list[str] = []
     parents: list[str] = []
-    for files in commits:
+    for position, files in enumerate(commits):
         _clear_py_files(path)
         index = repo.index
         index.clear()
@@ -30,7 +38,8 @@ def make_git_repo(path: Path, commits: list[dict[str, str]]) -> list[str]:
             index.add(rel)
         index.write()
         tree = index.write_tree()
-        oid = repo.create_commit("HEAD", _SIG, _SIG, "commit", tree, parents)
+        message = "commit" if messages is None else messages[position]
+        oid = repo.create_commit("HEAD", _SIG, _SIG, message, tree, parents)
         parents = [oid]
         shas.append(str(oid))
     return shas

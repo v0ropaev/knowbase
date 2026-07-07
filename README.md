@@ -84,7 +84,7 @@ flowchart LR
 
 ## Status
 
-**v0.6 — spine (artifact-identity rule v2), six deterministic extractors (cross-file grounding, incl. the library public-API surface, event handlers, and call-graph edges) plus the grounded process-path builder over them, LLM-grounded descriptions up to per-package architecture overviews and business-process-path labels, live incremental re-index (`kb watch`), MCP serving, the fourteen knowledge gates, and published Docker images.** Everything here grounds what it claims, and nothing it cannot:
+**v0.6 — spine (artifact-identity rule v2), six deterministic extractors (cross-file grounding, incl. the library public-API surface, event handlers, and call-graph edges) plus the grounded process-path builder over them, LLM-grounded descriptions up to per-package architecture overviews and business-process-path labels, ADR-candidate mining from git history (`kb mine`), live incremental re-index (`kb watch`), MCP serving, the fifteen knowledge gates, and published Docker images.** Everything here grounds what it claims, and nothing it cannot:
 
 - **Provenance spine** — content-addressed `span_id` (LOCKED); tree-sitter spans with a normalized S-expression fingerprint and per-SHA location; a single-Postgres, Alembic-managed store with content-addressed idempotent writes; the ≥ 1 `derived_from` anti-hallucination invariant enforced in-app *and* by a deferred DB trigger; pygit2 git ingest (no checkout) with a diff-based invalidation seed.
 - **Deterministic extractors** — the **import / dependency graph** (grimp resolves the edge, tree-sitter grounds it on the exact import statement, with an honest `approximate` fallback for re-exports / relative / unmappable imports — never a silent loss); the **FastAPI API-contract** extractor, which grounds a single route **across files** (handler in `routes.py` + `response_model` class in `schemas.py`); the **domain-entity** extractor (pydantic / dataclass / SQLAlchemy classes and their fields, grounded on the class definition **and cross-file on the entities they reference** — purely static, with documented detection limits); the **library public-API-surface** extractor (what a package exposes from its `__init__.py` — `__all__`-authoritative, with `__init__` re-exports resolved **cross-file** to the defining function/class — validated against an independent **griffe** static oracle); the **event-handler** extractor (pydantic `@field_validator`/`@model_validator`, FastAPI `@app.on_event`, SQLAlchemy `@event.listens_for` — one artifact per handler, grounded on the handler span and **cross-file** on the class it listens to; the call-form `event.listen(...)` and dynamic names are documented gaps); and the **call-graph edge** extractor (deterministic caller→callee edges — same-module, imported **cross-file**, and `self.` method calls — one `call_edge` per resolved pair with call-site lines aggregated; `obj.method(...)`, `getattr`, inherited self-calls and decorator/default-arg expressions are documented gaps; the deterministic foundation under the future business-process extractor); and the **process-path builder** (second-order: BFS over the call edges from extracted entrypoints — route/event handlers — to sink-registry matches, one `process_path` grounded on EVERY span of the chain, multi-file provenance; built-in sink registry + per-repo `.kb/sinks.yaml` override).
@@ -94,11 +94,12 @@ flowchart LR
 - **A frozen RAG-over-source baseline** and the **Tier-3 knowledge-vs-RAG recall gate** — the honest A/B that backs the "knowledge > RAG" thesis.
 - **LLM-grounded descriptions** — an optional, key-gated `kb describe` pass has an LLM write NL summaries for routes, entities, modules (per file), **packages** (a per-package architecture overview that synthesizes the import graph + public surface + member-module summaries, grounded on the package's own and its direct submodules' spans), and **business-process paths** (each materialized `process_path` chain gets an LLM-written label grounded on every span along the path, with a confidence that honestly stays < 1.0); every claim is validated against the target's own spans by a deterministic sub-property gate, so ungrounded claims are *dropped* (the anti-hallucination invariant, with a model in the loop). Stored as `extraction_method = "llm_grounded"`, grounded on code spans.
 - **Incremental re-index** — `kb index --parent <sha>` reuses unchanged files' spans from the parent snapshot and parses only the diff; extraction stays full, so the result is identical to a full re-index (a HARD gate proves it). Auto-detects the parent; falls back to full when none is indexed.
-- **Fourteen HARD CI eval gates** (see [Development](#development)).
+- **ADR-candidate mining** — an optional, key-gated `kb mine` pass walks local first-parent git history and has an LLM extract the *decision* a commit records (the "why" that code alone cannot show). The provenance bridge: each `decision` artifact is grounded on the spans its source commit **changed** — prose-born knowledge still points at exact code spans; the commit message is stored verbatim as a fact (immutable, pinned by the sha), and every claim passes the same deterministic span-validation floor (fabricated claims dropped; a commit with no surviving claim stores nothing). Local commits only; PR-description mining is a future slice.
+- **Fifteen HARD CI eval gates** (see [Development](#development)).
 
 - **A nightly LLM-judged A/B** (optional, key-gated, **non-gating**) — an answerer LLM answers each question from knowbase's grounded context vs a RAG-over-source context, and a judge LLM scores **answer accuracy** (against hand-written gold) + **hallucination**. Tracked metrics on top of recall; it never blocks CI.
 
-**Not done yet** (and deliberately not faked): ADR mining from git history and languages beyond Python. See the [Roadmap](#roadmap).
+**Not done yet** (and deliberately not faked): PR-description mining (the network slice of ADR mining) and languages beyond Python. See the [Roadmap](#roadmap).
 
 ## Quickstart
 
@@ -120,7 +121,7 @@ The base `--extra dev` install stays torch-free; the `embed` extra pulls sentenc
 ### Run the gates
 
 ```bash
-uv run pytest src/kb/eval -q   # the fourteen HARD gates (spins an ephemeral local Postgres)
+uv run pytest src/kb/eval -q   # the fifteen HARD gates (spins an ephemeral local Postgres)
 ```
 
 ### Index a commit
@@ -168,6 +169,14 @@ uv run kb describe --db-url <postgres-url>   # separate, key-gated pass (ANTHROP
 ```
 
 `kb describe` has an LLM (via `kb.llm`, `KB_LLM_PROVIDER` in {`anthropic`,`openai`}) write a short NL summary + structured claims for each route, entity, module (per file), **package** (a per-package architecture overview, grounded on the package's own and its direct submodules' spans, synthesizing the import graph + public surface + member-module summaries as context), and **business-process path** (a grounded NL label for the deterministic `process_path` chain, grounded on every span along the path) in the latest snapshot. **Every claim is validated against that target's own grounding spans** — claims citing a symbol not in the code are dropped, and a `description` artifact is stored only if something survives, grounded on those code spans (`extraction_method = "llm_grounded"`). It needs an API key, never runs on `kb index`, and the deterministic grounding gate is exercised in CI without a key (stub LLM).
+
+### Mine decision candidates from git history (LLM-grounded)
+
+```bash
+uv run kb mine <path-to-repo> --db-url <postgres-url>   # separate, key-gated pass (ANTHROPIC_API_KEY / OPENAI_API_KEY)
+```
+
+`kb mine` walks the local first-parent history from the latest indexed commit (`--sha` to start elsewhere, `--max-commits` to bound the LLM spend) and has an LLM extract the decision each commit records from its message plus its changed code. Each stored `decision` artifact is **grounded on the spans the commit changed** — the same ≥ 1-span invariant as everything else — with the commit message kept verbatim in the payload as a fact. Claims are span-validated (fabricated claims dropped; nothing survives → nothing stored); merge commits are skipped (PR mining is a future slice), docs-only commits never pay an LLM call, and re-running skips already-mined commits (`--force` to re-mine). Requires the commits to be indexed first (`kb index` / `kb watch`).
 
 ### Serve to an AI agent (MCP)
 
@@ -240,9 +249,9 @@ A Python package `kb` (uv, src-layout). Modules and their responsibilities:
 | `kb.mcp` | Read-only MCP server and its provenance-carrying records: `find_provenance`, `get_knowledge`, `search_knowledge`. |
 | `kb.embed` | Replaceable embedding adapters (sentence-transformers default, OpenAI optional) + snapshot population. Torch isolated behind the `embed` extra and a lazy import. |
 | `kb.rag` | The frozen pgvector RAG-over-source baseline — the "other arm" of the knowledge-vs-RAG A/B (no provenance, no grounding). |
-| `kb.extract.semantic` | LLM-grounded extraction (`kb describe`): NL descriptions of routes/entities/modules, **per-package architecture overviews** (rich synthesis from the import graph + public surface + member summaries, grounded on code spans), **and business-process-path labels** (one per `process_path`, grounded on every span along the path) with a deterministic sub-property gate (`grounding.validate_claims`) that drops any claim not backed by the target's spans. Separate key-gated pass; never on `index`. |
+| `kb.extract.semantic` | LLM-grounded extraction (`kb describe`): NL descriptions of routes/entities/modules, **per-package architecture overviews** (rich synthesis from the import graph + public surface + member summaries, grounded on code spans), **and business-process-path labels** (one per `process_path`, grounded on every span along the path) with a deterministic sub-property gate (`grounding.validate_claims`) that drops any claim not backed by the target's spans. Plus **`kb mine`** — ADR-candidate mining over local first-parent git history: one `decision` artifact per mined commit, grounded on the commit's **changed spans**, message verbatim in the payload, claims under the same floor. Both are separate key-gated passes; never on `index`. |
 | `kb.daemon.cli` | The `kb` CLI: `index` (full or `--incremental`/`--parent`), `watch` (poll a local branch ref, per-commit incremental catch-up, `branch_ref` cursor), `migrate`, `embed`, `describe`, `serve` (MCP), and `introspect` — all functional. |
-| `kb.eval` | Fourteen HARD CI gates (identity reproducibility, adversarial grounding, Tier-1 import oracle, Tier-1 API oracle, Tier-1 entities oracle, Tier-1 library-surface oracle, Tier-1 events oracle, Tier-1 call-graph oracle, Tier-1 process-paths oracle, Tier-3 knowledge-vs-RAG recall, Tier-4 one-hop invalidation, invariants, semantic grounding floor, incremental re-index equivalence) plus the supporting MCP / embed / store suite. |
+| `kb.eval` | Fifteen HARD CI gates (identity reproducibility, adversarial grounding, Tier-1 import oracle, Tier-1 API oracle, Tier-1 entities oracle, Tier-1 library-surface oracle, Tier-1 events oracle, Tier-1 call-graph oracle, Tier-1 process-paths oracle, Tier-3 knowledge-vs-RAG recall, Tier-4 one-hop invalidation, invariants, semantic grounding floor, ADR-mining floor, incremental re-index equivalence) plus the supporting MCP / embed / store suite. |
 
 Core tables: `commit_ref`, `branch_ref`, `code_span`, `span_occurrence`, `artifact` (now with `embedding vector(384)` + `embedding_model_id`), `artifact_derived_from`, `snapshot_entry`, and `rag_chunk` (the baseline arm).
 
@@ -252,10 +261,10 @@ Core tables: `commit_ref`, `branch_ref`, `code_span`, `span_occurrence`, `artifa
 uv sync --extra dev            # venv + install
 uv run ruff check src/kb       # lint
 uv run mypy                    # strict type-check
-uv run pytest src/kb/eval -q   # the fourteen HARD eval gates
+uv run pytest src/kb/eval -q   # the fifteen HARD eval gates
 ```
 
-CI (GitHub Actions, workflow **"CI"**, `.github/workflows/ci.yml`) runs ruff, `mypy --strict`, and the eval gates against a `pgvector/pgvector:pg17` service (with the embedding model cached). The **fourteen HARD gates** that block a merge:
+CI (GitHub Actions, workflow **"CI"**, `.github/workflows/ci.yml`) runs ruff, `mypy --strict`, and the eval gates against a `pgvector/pgvector:pg17` service (with the embedding model cached). The **fifteen HARD gates** that block a merge:
 
 1. **Identity reproducibility** — formatting / comment / docstring / location changes must NOT change `span_id`; a rename MUST. Pure identity core, no database.
 2. **Adversarial grounding** — an ungrounded artifact is rejected by *both* layers (the app's `GroundingError` and the DB's deferred `artifact_grounded_check` trigger); a genuinely grounded artifact commits cleanly.
@@ -271,6 +280,7 @@ CI (GitHub Actions, workflow **"CI"**, `.github/workflows/ci.yml`) runs ruff, `m
 12. **Semantic grounding floor** — the LLM-grounded describer's claims are validated against the artifact's own spans by a deterministic sub-property gate; an adversarial fabricated claim is *dropped*, never stored (run on a stub LLM, so it gates without an API key).
 13. **Incremental re-index equivalence** — an incremental re-index (reuse unchanged files' spans from the parent, parse only the diff) yields the *identical* `{logical_key: artifact_id}` snapshot as a full re-index of the same tree, and the parse is provably skipped for unchanged files (counter assertions); a missing/unindexed parent falls back to full.
 14. **Tier-1 process-paths oracle** — materialized business-process paths match a hand-labeled oracle (2-hop cross-file chain, 0-hop direct-sink handler, event-handler entrypoint); the flagship artifact is grounded across **three files**; a reachable call cycle cannot hang the BFS; the fixture's own `.kb/sinks.yaml` proves the override chain; a no-sink route yields no artifact; depth caps are honored.
+15. **ADR-mining floor** — mined `decision` artifacts are grounded on the spans their source commit changed (role `changed`, provenance limited to the touched files); an adversarial fabricated claim is *dropped*; a commit whose changed code backs no claim stores nothing; a docs-only commit never calls the LLM; merges are skipped; re-mining is idempotent and never re-bills stored decisions (run on a stub LLM, so it gates without an API key).
 
 The identity rules in `kb.ids` (and `kb.structural`) are **LOCKED**: changing one is a breaking change, gated behind a `NORMALIZATION_VERSION` / `extractor_version` bump so existing digests are invalidated rather than silently colliding.
 
@@ -299,7 +309,8 @@ Next milestones:
 - [x] **Nightly LLM-judged A/B** (key-gated, non-gating) — grounded-answer accuracy + hallucination rate on top of recall. *(shipped)*
 - [x] **LLM-grounded semantic layer** — model-backed artifacts that still carry ≥ 1 span (`extraction_method = "llm_grounded"`): `kb describe` writes span-validated descriptions for routes, entities, modules, and per-package architecture overviews. *(shipped)*
 - [x] **Incremental re-index on git push** — `kb index --incremental`/`--parent` reuses unchanged files' spans from the parent snapshot (extraction stays full; equivalence is gated), and `kb watch` polls a local branch ref, indexing each new first-parent commit incrementally with a `branch_ref` cursor (`--max-catchup` guard, `--once` for cron/CI). *(shipped)*
-- [ ] **ADR mining** from git / PR history.
+- [x] **ADR mining — slice 1 (local commit history)** — `kb mine` walks first-parent history and stores span-grounded `decision` candidates: each grounded on the spans its commit changed, message verbatim as a fact, claims under the deterministic span-validation floor. *(shipped)*
+- [ ] **PR-description mining** — the network slice of ADR mining (PR titles/bodies mapped onto merge commits).
 - [x] **Grounded business-process extraction** — `process_path` artifacts (entrypoint → call chain → sink-registry match, multi-file grounding) plus LLM labeling via `kb describe` (a span-validated NL label per path, grounded on the path's own spans, confidence honestly < 1.0). *(shipped)*
 - [ ] **More languages** beyond Python.
 

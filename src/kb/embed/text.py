@@ -82,4 +82,14 @@ def embed_text(kind: str, payload: dict[str, Any]) -> str:
     if kind == "description":
         claims = " ".join(str(c.get("text", "")) for c in payload.get("claims", []))
         return f"{payload.get('summary', '')} {claims}".strip() or head
+    if kind == "decision":
+        claims = " ".join(str(c.get("text", "")) for c in payload.get("claims", []))
+        parts = [
+            head,
+            str(payload.get("summary", "")),
+            claims,
+            str(payload.get("message", "")),
+            "files " + " ".join(str(f) for f in payload.get("files_changed", [])),
+        ]
+        return " ".join(p for p in parts if p.strip())
     return head
