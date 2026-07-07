@@ -90,6 +90,12 @@ def summarize(kind: str, payload: dict[str, Any]) -> str:
         suffix = f" +{len(regs) - 1} more" if len(regs) > 1 else ""
         family = first.get("family", "?")
         return f"{payload.get('handler', '?')} on {target}:{trigger} ({family}{suffix})"
+    if kind == "process_path":
+        sink = payload.get("sink", {})
+        return (
+            f"{payload.get('entrypoint_reference', '?')} -> {sink.get('name', '?')} "
+            f"@ {payload.get('terminal', '?')} ({payload.get('depth', '?')} hops)"
+        )
     if kind == "call_edge":
         n = len(payload.get("lines", []))
         return (

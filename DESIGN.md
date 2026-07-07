@@ -338,6 +338,13 @@ rejected. **Verbalized LLM confidence is never used as the score.**
 > still validate against code spans, so provenance stays code-grounded). The gate is deterministic,
 > so `semantic_grounding_test` enforces it in CI (stub LLM, no API key), including an adversarial
 > fabricated claim that must be dropped — on the artifact, module, and package paths.
+>
+> *Implemented (deterministic process slice):* `process_path` artifacts satisfy the floor **by
+> construction** — every sink claim IS a registry match on the materialized path and every endpoint
+> IS an extracted entrypoint. Their `confidence` is 1.0: a found path is machine-checked exact (the
+> `call_edge` precedent); the unknown-unknowns of the bounded-recall call graph are priced into the
+> FUTURE LLM-labeled process artifact (confidence < 1.0 there), with incompleteness carried as
+> explicit payload facts here, never a fudged scalar.
 
 ---
 
@@ -363,7 +370,7 @@ freshness(current|stale@sha)`, with a deterministic tie-break for reproducible e
 | Module | Responsibility | Key tech |
 |--------|----------------|----------|
 | `kb.structural` | Parse Python without executing it; enumerate symbols/imports/call-sites with per-SHA byte/line ranges; compute content-addressed span identity; incremental reparse. Hidden behind a `StructuralIndex`/`PathEngine` interface so a SCIP backend can replace tree-sitter later. | tree-sitter + tree-sitter-python (canonical bindings) |
-| `kb.extract.deterministic` | No-LLM extractors → exact artifacts (confidence=1.0): import graph; FastAPI API contract (static, cross-file grounded); domain entities (pydantic/dataclass/SQLAlchemy, static, cross-file links to referenced entities, hand-labeled gate); library public-API surface (static tree-sitter, cross-file `__init__` re-export resolution, independent griffe-oracle gate); event handlers (pydantic validators / FastAPI `on_event` / SQLAlchemy `listens_for`, static, cross-file target grounding, hand-labeled gate); call-graph edges (per-edge artifacts, three resolution tiers, caller+callee span grounding, hand-labeled gate). | grimp, tree-sitter queries; griffe (dev-only oracle) |
+| `kb.extract.deterministic` | No-LLM extractors → exact artifacts (confidence=1.0): import graph; FastAPI API contract (static, cross-file grounded); domain entities (pydantic/dataclass/SQLAlchemy, static, cross-file links to referenced entities, hand-labeled gate); library public-API surface (static tree-sitter, cross-file `__init__` re-export resolution, independent griffe-oracle gate); event handlers (pydantic validators / FastAPI `on_event` / SQLAlchemy `listens_for`, static, cross-file target grounding, hand-labeled gate); call-graph edges (per-edge artifacts, three resolution tiers, caller+callee span grounding, hand-labeled gate); process paths (`paths.PathEngine` — the first shipped increment of the PathEngine seam — BFS to sink-registry matches, multi-file grounded, registry digest identity-bearing). | grimp, tree-sitter queries; griffe (dev-only oracle) |
 | `kb.introspect` | Eval-only runtime oracle: runs a FastAPI app in a network-blocked sandbox and emits `app.openapi()` for the Tier-1 API gate. Never on the index path. | subprocess sandbox, fastapi |
 | `kb.embed` | Replaceable embedding adapters + snapshot population for `search_knowledge`. Torch isolated behind the `embed` extra and a lazy import. | sentence-transformers (default), OpenAI (optional), pgvector |
 | `kb.rag` | Frozen pgvector RAG-over-source baseline — the "other arm" of the knowledge-vs-RAG A/B (no provenance/grounding). | deterministic line-window chunker, pgvector |
@@ -453,8 +460,9 @@ Review fact-checked these against current (2026) sources. Caveats are first-clas
    `event.listen` deferred).
 2. The **one** grounded business-process extractor (named real path + labeler + validator +
    deterministic sub-property gate). *Deterministic foundation shipped:* the `call_edge` extractor
-   + Tier-1 calls gate; `PathEngine` slicing, the sink registry, the labeler and the span-binding
-   validator are next.
+   + Tier-1 calls gate, and now the `process_path` builder (PathEngine BFS + sink registry +
+   `.kb/sinks.yaml` override, multi-file grounded paths, Tier-1 processes gate). The LLM labeler
+   and the span-binding validator are next.
 3. Recursive invalidation (`artifact_depends_on`), multi-branch dedup, freshness precompute.
 4. Embeddings + `search_knowledge` *(shipped v0.2)*; then `pg_search`/BM25 + RRF if vector ranking is insufficient.
 5. ADR mining from git/PR history.

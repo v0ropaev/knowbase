@@ -84,21 +84,21 @@ flowchart LR
 
 ## Status
 
-**v0.5 — spine (artifact-identity rule v2), six deterministic extractors (cross-file grounding, incl. the library public-API surface, event handlers, and call-graph edges), LLM-grounded descriptions up to per-package architecture overviews, live incremental re-index (`kb watch`), MCP serving, the thirteen knowledge gates, and published Docker images.** Everything here grounds what it claims, and nothing it cannot:
+**v0.5 — spine (artifact-identity rule v2), six deterministic extractors (cross-file grounding, incl. the library public-API surface, event handlers, and call-graph edges) plus the grounded process-path builder over them, LLM-grounded descriptions up to per-package architecture overviews, live incremental re-index (`kb watch`), MCP serving, the fourteen knowledge gates, and published Docker images.** Everything here grounds what it claims, and nothing it cannot:
 
 - **Provenance spine** — content-addressed `span_id` (LOCKED); tree-sitter spans with a normalized S-expression fingerprint and per-SHA location; a single-Postgres, Alembic-managed store with content-addressed idempotent writes; the ≥ 1 `derived_from` anti-hallucination invariant enforced in-app *and* by a deferred DB trigger; pygit2 git ingest (no checkout) with a diff-based invalidation seed.
-- **Deterministic extractors** — the **import / dependency graph** (grimp resolves the edge, tree-sitter grounds it on the exact import statement, with an honest `approximate` fallback for re-exports / relative / unmappable imports — never a silent loss); the **FastAPI API-contract** extractor, which grounds a single route **across files** (handler in `routes.py` + `response_model` class in `schemas.py`); the **domain-entity** extractor (pydantic / dataclass / SQLAlchemy classes and their fields, grounded on the class definition **and cross-file on the entities they reference** — purely static, with documented detection limits); the **library public-API-surface** extractor (what a package exposes from its `__init__.py` — `__all__`-authoritative, with `__init__` re-exports resolved **cross-file** to the defining function/class — validated against an independent **griffe** static oracle); the **event-handler** extractor (pydantic `@field_validator`/`@model_validator`, FastAPI `@app.on_event`, SQLAlchemy `@event.listens_for` — one artifact per handler, grounded on the handler span and **cross-file** on the class it listens to; the call-form `event.listen(...)` and dynamic names are documented gaps); and the **call-graph edge** extractor (deterministic caller→callee edges — same-module, imported **cross-file**, and `self.` method calls — one `call_edge` per resolved pair with call-site lines aggregated; `obj.method(...)`, `getattr`, inherited self-calls and decorator/default-arg expressions are documented gaps; the deterministic foundation under the future business-process extractor).
+- **Deterministic extractors** — the **import / dependency graph** (grimp resolves the edge, tree-sitter grounds it on the exact import statement, with an honest `approximate` fallback for re-exports / relative / unmappable imports — never a silent loss); the **FastAPI API-contract** extractor, which grounds a single route **across files** (handler in `routes.py` + `response_model` class in `schemas.py`); the **domain-entity** extractor (pydantic / dataclass / SQLAlchemy classes and their fields, grounded on the class definition **and cross-file on the entities they reference** — purely static, with documented detection limits); the **library public-API-surface** extractor (what a package exposes from its `__init__.py` — `__all__`-authoritative, with `__init__` re-exports resolved **cross-file** to the defining function/class — validated against an independent **griffe** static oracle); the **event-handler** extractor (pydantic `@field_validator`/`@model_validator`, FastAPI `@app.on_event`, SQLAlchemy `@event.listens_for` — one artifact per handler, grounded on the handler span and **cross-file** on the class it listens to; the call-form `event.listen(...)` and dynamic names are documented gaps); and the **call-graph edge** extractor (deterministic caller→callee edges — same-module, imported **cross-file**, and `self.` method calls — one `call_edge` per resolved pair with call-site lines aggregated; `obj.method(...)`, `getattr`, inherited self-calls and decorator/default-arg expressions are documented gaps; the deterministic foundation under the future business-process extractor); and the **process-path builder** (second-order: BFS over the call edges from extracted entrypoints — route/event handlers — to sink-registry matches, one `process_path` grounded on EVERY span of the chain, multi-file provenance; built-in sink registry + per-repo `.kb/sinks.yaml` override).
 - **`kb introspect`** — a sandboxed, network-blocked `app.openapi()` oracle, eval-only and never on the index path, that the API gate scores the static contract against.
 - **Read-only MCP server** — `find_provenance`, `get_knowledge`, and `search_knowledge`, each returning provenance-carrying units (method + confidence + freshness).
 - **pgvector embeddings + semantic search** — a replaceable embedding provider (sentence-transformers by default, OpenAI optional) populated by a separate `kb embed` pass; torch stays out of the index path.
 - **A frozen RAG-over-source baseline** and the **Tier-3 knowledge-vs-RAG recall gate** — the honest A/B that backs the "knowledge > RAG" thesis.
 - **LLM-grounded descriptions** — an optional, key-gated `kb describe` pass has an LLM write NL summaries for routes, entities, modules (per file), and **packages** (a per-package architecture overview that synthesizes the import graph + public surface + member-module summaries, grounded on the package's own and its direct submodules' spans); every claim is validated against the target's own spans by a deterministic sub-property gate, so ungrounded claims are *dropped* (the anti-hallucination invariant, with a model in the loop). Stored as `extraction_method = "llm_grounded"`, grounded on code spans.
 - **Incremental re-index** — `kb index --parent <sha>` reuses unchanged files' spans from the parent snapshot and parses only the diff; extraction stays full, so the result is identical to a full re-index (a HARD gate proves it). Auto-detects the parent; falls back to full when none is indexed.
-- **Thirteen HARD CI eval gates** (see [Development](#development)).
+- **Fourteen HARD CI eval gates** (see [Development](#development)).
 
 - **A nightly LLM-judged A/B** (optional, key-gated, **non-gating**) — an answerer LLM answers each question from knowbase's grounded context vs a RAG-over-source context, and a judge LLM scores **answer accuracy** (against hand-written gold) + **hallucination**. Tracked metrics on top of recall; it never blocks CI.
 
-**Not done yet** (and deliberately not faked): ADR mining from git history, grounded business-process extraction, and languages beyond Python. See the [Roadmap](#roadmap).
+**Not done yet** (and deliberately not faked): ADR mining from git history, the LLM labeling of business-process paths, and languages beyond Python. See the [Roadmap](#roadmap).
 
 ## Quickstart
 
@@ -120,7 +120,7 @@ The base `--extra dev` install stays torch-free; the `embed` extra pulls sentenc
 ### Run the gates
 
 ```bash
-uv run pytest src/kb/eval -q   # the thirteen HARD gates (spins an ephemeral local Postgres)
+uv run pytest src/kb/eval -q   # the fourteen HARD gates (spins an ephemeral local Postgres)
 ```
 
 ### Index a commit
@@ -234,6 +234,7 @@ A Python package `kb` (uv, src-layout). Modules and their responsibilities:
 | `kb.extract.deterministic.entities` | Static domain-entity extractor — pydantic / dataclass / SQLAlchemy classes + their fields, grounded on the class definition **and, across files, on the entities they reference** (field types + `relationship()`); detection signals and limits recorded in the payload. |
 | `kb.extract.deterministic.library_surface` | Static library public-API-surface extractor — one `public_symbol` per name a package exposes from its `__init__.py` (`__all__`-authoritative), `__init__` re-exports resolved **cross-file** to the defining function/class; validated by an independent griffe static oracle. Never imports user code. |
 | `kb.extract.deterministic.calls` | Static call-graph edge extractor — one `call_edge` per resolved caller→callee pair (same-module / imported **cross-file** / `self.` method), call-site lines aggregated; only resolved first-party edges are emitted; dynamic/attribute/inherited calls are documented gaps. Never imports user code. |
+| `kb.extract.deterministic.paths` | Second-order process-path builder — `process_path` per (entrypoint, sink, terminal): shortest chain of resolved call edges from an extracted route/event handler to a sink-registry match, grounded on every span along the path (multi-file); built-in registry + `.kb/sinks.yaml` override (registry digest is identity-bearing); caps flagged, never silent. |
 | `kb.extract.deterministic.events` | Static event-handler extractor — one `event_handler` per handler carrying pydantic validator / FastAPI `on_event` / SQLAlchemy `listens_for` decorator registrations (stacked decorators in `payload.registrations`), grounded on the handler span **and, across files, on the class it listens to**; call-form `event.listen(...)` and dynamic names are documented gaps. |
 | `kb.introspect` | Sandboxed, network-blocked `app.openapi()` oracle — eval-only ground truth for the API gate, never on the index path. |
 | `kb.mcp` | Read-only MCP server and its provenance-carrying records: `find_provenance`, `get_knowledge`, `search_knowledge`. |
@@ -241,7 +242,7 @@ A Python package `kb` (uv, src-layout). Modules and their responsibilities:
 | `kb.rag` | The frozen pgvector RAG-over-source baseline — the "other arm" of the knowledge-vs-RAG A/B (no provenance, no grounding). |
 | `kb.extract.semantic` | LLM-grounded extraction (`kb describe`): NL descriptions of routes/entities/modules **and per-package architecture overviews** (rich synthesis from the import graph + public surface + member summaries, grounded on code spans) with a deterministic sub-property gate (`grounding.validate_claims`) that drops any claim not backed by the target's spans. Separate key-gated pass; never on `index`. |
 | `kb.daemon.cli` | The `kb` CLI: `index` (full or `--incremental`/`--parent`), `watch` (poll a local branch ref, per-commit incremental catch-up, `branch_ref` cursor), `migrate`, `embed`, `describe`, `serve` (MCP), and `introspect` — all functional. |
-| `kb.eval` | Thirteen HARD CI gates (identity reproducibility, adversarial grounding, Tier-1 import oracle, Tier-1 API oracle, Tier-1 entities oracle, Tier-1 library-surface oracle, Tier-1 events oracle, Tier-1 call-graph oracle, Tier-3 knowledge-vs-RAG recall, Tier-4 one-hop invalidation, invariants, semantic grounding floor, incremental re-index equivalence) plus the supporting MCP / embed / store suite. |
+| `kb.eval` | Fourteen HARD CI gates (identity reproducibility, adversarial grounding, Tier-1 import oracle, Tier-1 API oracle, Tier-1 entities oracle, Tier-1 library-surface oracle, Tier-1 events oracle, Tier-1 call-graph oracle, Tier-1 process-paths oracle, Tier-3 knowledge-vs-RAG recall, Tier-4 one-hop invalidation, invariants, semantic grounding floor, incremental re-index equivalence) plus the supporting MCP / embed / store suite. |
 
 Core tables: `commit_ref`, `branch_ref`, `code_span`, `span_occurrence`, `artifact` (now with `embedding vector(384)` + `embedding_model_id`), `artifact_derived_from`, `snapshot_entry`, and `rag_chunk` (the baseline arm).
 
@@ -251,10 +252,10 @@ Core tables: `commit_ref`, `branch_ref`, `code_span`, `span_occurrence`, `artifa
 uv sync --extra dev            # venv + install
 uv run ruff check src/kb       # lint
 uv run mypy                    # strict type-check
-uv run pytest src/kb/eval -q   # the thirteen HARD eval gates
+uv run pytest src/kb/eval -q   # the fourteen HARD eval gates
 ```
 
-CI (GitHub Actions, workflow **"CI"**, `.github/workflows/ci.yml`) runs ruff, `mypy --strict`, and the eval gates against a `pgvector/pgvector:pg17` service (with the embedding model cached). The **thirteen HARD gates** that block a merge:
+CI (GitHub Actions, workflow **"CI"**, `.github/workflows/ci.yml`) runs ruff, `mypy --strict`, and the eval gates against a `pgvector/pgvector:pg17` service (with the embedding model cached). The **fourteen HARD gates** that block a merge:
 
 1. **Identity reproducibility** — formatting / comment / docstring / location changes must NOT change `span_id`; a rename MUST. Pure identity core, no database.
 2. **Adversarial grounding** — an ungrounded artifact is rejected by *both* layers (the app's `GroundingError` and the DB's deferred `artifact_grounded_check` trigger); a genuinely grounded artifact commits cleanly.
@@ -269,6 +270,7 @@ CI (GitHub Actions, workflow **"CI"**, `.github/workflows/ci.yml`) runs ruff, `m
 11. **Invariants** — zero orphans (every snapshot artifact is grounded), and re-indexing the same SHA yields the identical set of artifact ids.
 12. **Semantic grounding floor** — the LLM-grounded describer's claims are validated against the artifact's own spans by a deterministic sub-property gate; an adversarial fabricated claim is *dropped*, never stored (run on a stub LLM, so it gates without an API key).
 13. **Incremental re-index equivalence** — an incremental re-index (reuse unchanged files' spans from the parent, parse only the diff) yields the *identical* `{logical_key: artifact_id}` snapshot as a full re-index of the same tree, and the parse is provably skipped for unchanged files (counter assertions); a missing/unindexed parent falls back to full.
+14. **Tier-1 process-paths oracle** — materialized business-process paths match a hand-labeled oracle (2-hop cross-file chain, 0-hop direct-sink handler, event-handler entrypoint); the flagship artifact is grounded across **three files**; a reachable call cycle cannot hang the BFS; the fixture's own `.kb/sinks.yaml` proves the override chain; a no-sink route yields no artifact; depth caps are honored.
 
 The identity rules in `kb.ids` (and `kb.structural`) are **LOCKED**: changing one is a breaking change, gated behind a `NORMALIZATION_VERSION` / `extractor_version` bump so existing digests are invalidated rather than silently colliding.
 
@@ -298,7 +300,7 @@ Next milestones:
 - [x] **LLM-grounded semantic layer** — model-backed artifacts that still carry ≥ 1 span (`extraction_method = "llm_grounded"`): `kb describe` writes span-validated descriptions for routes, entities, modules, and per-package architecture overviews. *(shipped)*
 - [x] **Incremental re-index on git push** — `kb index --incremental`/`--parent` reuses unchanged files' spans from the parent snapshot (extraction stays full; equivalence is gated), and `kb watch` polls a local branch ref, indexing each new first-parent commit incrementally with a `branch_ref` cursor (`--max-catchup` guard, `--once` for cron/CI). *(shipped)*
 - [ ] **ADR mining** from git / PR history.
-- [ ] **Grounded business-process extraction.**
+- [~] **Grounded business-process extraction** — *deterministic path extraction shipped*: `process_path` artifacts (entrypoint → call chain → sink-registry match, multi-file grounding). LLM labeling + span-binding validator are the remaining piece.
 - [ ] **More languages** beyond Python.
 
 ## Contributing
