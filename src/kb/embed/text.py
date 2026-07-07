@@ -57,6 +57,18 @@ def embed_text(kind: str, payload: dict[str, Any]) -> str:
             "fields " + " ".join(str(f) for r in regs for f in r.get("fields", [])),
         ]
         return " ".join(p for p in parts if p.strip())
+    if kind == "process_path":
+        sink = payload.get("sink", {})
+        parts = [
+            head,
+            f"process {payload.get('entrypoint', '')}",
+            f"route {payload.get('entrypoint_reference', '')}",
+            "steps " + " ".join(str(s) for s in payload.get("steps", [])),
+            f"sink {sink.get('name', '')} "
+            + " ".join(str(m.get("text", "")) for m in sink.get("matches", [])),
+            f"terminal {payload.get('terminal', '')}",
+        ]
+        return " ".join(p for p in parts if p.strip())
     if kind == "call_edge":
         parts = [
             head,

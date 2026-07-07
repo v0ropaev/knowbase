@@ -32,13 +32,19 @@ from kb.extract.deterministic.events import EventExtractor
 from kb.extract.deterministic.fastapi_contract import FastAPIExtractor
 from kb.extract.deterministic.imports import ImportExtractor
 from kb.extract.deterministic.library_surface import LibrarySurfaceExtractor
+from kb.extract.deterministic.paths import ProcessPathExtractor
 from kb.git import repo as gitrepo
 from kb.store.queries import branch_head, is_sha_indexed
 from kb.store.writer import upsert_branch_ref
 
 
 def default_extractors() -> list[Extractor]:
-    """The standard extractor set shared by ``kb index`` and ``kb watch``."""
+    """The standard extractor set shared by ``kb index`` and ``kb watch``.
+
+    Order is load-bearing: the pipeline feeds each extractor's outputs to LATER ones via
+    ``ExtractContext.prior_artifacts``; ProcessPathExtractor is second-order (consumes
+    api_route + event_handler + call_edge) and must stay LAST.
+    """
     return [
         ImportExtractor(),
         FastAPIExtractor(),
@@ -46,6 +52,7 @@ def default_extractors() -> list[Extractor]:
         EventExtractor(),
         LibrarySurfaceExtractor(),
         CallGraphExtractor(),
+        ProcessPathExtractor(),
     ]
 
 

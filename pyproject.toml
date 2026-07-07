@@ -19,12 +19,12 @@ dependencies = [
     "sqlparse>=0.5.5",
     "fastmcp>=3.3,<4",
     "pgvector>=0.4,<0.5",
+    "pyyaml>=6",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
-    "pyyaml>=6",
     "ruff>=0.6",
     "mypy>=1.10",
     # fastapi powers the eval oracle (kb introspect) and the Tier-1 API gate only; the serving
@@ -96,7 +96,7 @@ ignore_errors = true
 [[tool.mypy.overrides]]
 module = [
     "pygit2.*", "grimp.*", "sqlparse.*", "fastapi.*", "starlette.*", "fastmcp.*", "mcp.*",
-    "sentence_transformers.*", "pgvector.*", "openai.*", "anthropic.*",
+    "sentence_transformers.*", "pgvector.*", "openai.*", "anthropic.*", "yaml.*",
 ]
 ignore_missing_imports = true
 

@@ -77,3 +77,8 @@ class ExtractContext:
     first_party_root: str
     spans_by_module: Mapping[str, Sequence[ParsedSpan]]
     path_by_module: Mapping[str, str]
+    # Artifacts produced by extractors that ran EARLIER in this same snapshot pass, in emission
+    # order — empty for first-order extractors. The pipeline appends each extractor's outputs
+    # before invoking the next, so registration ORDER is load-bearing for second-order extractors
+    # (see kb.daemon.watch.default_extractors).
+    prior_artifacts: Sequence[ExtractedArtifact] = ()

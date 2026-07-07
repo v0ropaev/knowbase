@@ -73,6 +73,39 @@ def iter_python_files_at(repo: pygit2.Repository, rev: str) -> Iterator[tuple[st
     yield from _walk_tree(repo, commit.tree, "")
 
 
+def iter_files_under_at(
+    repo: pygit2.Repository, rev: str, prefix: str
+) -> Iterator[tuple[str, bytes]]:
+    """Yield ``(posix_path, bytes)`` for every blob under ``prefix`` in the tree at ``rev``.
+
+    Materialization aid for extractor config that travels with the commit (e.g. ``.kb/``); the
+    ``*.py``-only ``iter_python_files_at`` stays untouched so root discovery, parsing and diff
+    reuse never see non-Python paths.
+    """
+    commit = resolve_commit(repo, rev)
+    key = prefix.rstrip("/")
+    try:
+        entry = commit.tree[key]
+    except KeyError:
+        return
+    if entry.type_str != "tree":
+        return
+    subtree = cast("pygit2.Tree", repo[entry.id])
+    yield from _walk_any_tree(repo, subtree, f"{key}/")
+
+
+def _walk_any_tree(
+    repo: pygit2.Repository, tree: pygit2.Tree, prefix: str
+) -> Iterator[tuple[str, bytes]]:
+    for entry in tree:
+        name = entry.name or ""
+        path = f"{prefix}{name}"
+        if entry.type_str == "tree":
+            yield from _walk_any_tree(repo, cast("pygit2.Tree", repo[entry.id]), f"{path}/")
+        elif entry.type_str == "blob":
+            yield path, bytes(cast("pygit2.Blob", repo[entry.id]).data)
+
+
 def _walk_tree(
     repo: pygit2.Repository, tree: pygit2.Tree, prefix: str
 ) -> Iterator[tuple[str, bytes]]:

@@ -211,15 +211,7 @@ class CallGraphExtractor:
         return self._parser.parse(source).root_node
 
     def _caller_scan_root(self, span: ParsedSpan) -> Node | None:
-        """The subtree whose calls belong to this caller: a def's BODY (its own decorators,
-        parameters and annotations are excluded by construction), or the whole file for a module."""
-        root = self._parser.parse(textwrap.dedent(span.raw_text).encode("utf-8")).root_node
-        if span.span_kind == "module":
-            return root
-        deco = _first_child_of_type(root, "decorated_definition")
-        host = deco if deco is not None else root
-        fn = _first_child_of_type(host, "function_definition")
-        return fn.child_by_field_name("body") if fn is not None else None
+        return _caller_scan_root(self._parser, span)
 
     # --- artifact assembly -----------------------------------------------------
 
@@ -251,6 +243,19 @@ class CallGraphExtractor:
 
 
 # --- module-level helpers (kept local; mirror the other deterministic extractors) ----
+
+
+def _caller_scan_root(parser: Parser, span: ParsedSpan) -> Node | None:
+    """The subtree whose calls belong to one caller: a def's BODY (its own decorators, parameters
+    and annotations are excluded by construction), or the whole file for a module. Shared with the
+    process-path sink scan so call attribution stays bit-identical across both."""
+    root = parser.parse(textwrap.dedent(span.raw_text).encode("utf-8")).root_node
+    if span.span_kind == "module":
+        return root
+    deco = _first_child_of_type(root, "decorated_definition")
+    host = deco if deco is not None else root
+    fn = _first_child_of_type(host, "function_definition")
+    return fn.child_by_field_name("body") if fn is not None else None
 
 
 def _iter_calls(node: Node) -> Iterator[Node]:

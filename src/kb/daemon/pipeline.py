@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import tempfile
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pygit2
 from sqlalchemy import Connection, Engine
 
-from kb.extract.base import ExtractContext, Extractor
+from kb.extract.base import ExtractContext, ExtractedArtifact, Extractor
 from kb.git import repo as gitrepo
 from kb.git.diff import changed_paths
 from kb.store.queries import is_sha_indexed, reusable_spans
@@ -67,6 +67,7 @@ def index_commit(
     repo = gitrepo.open_repo(repo_path)
     sha = gitrepo.commit_sha(repo, rev)
     files = dict(gitrepo.iter_python_files_at(repo, sha))
+    extra_files = dict(gitrepo.iter_files_under_at(repo, sha, ".kb/"))
     root = (
         first_party_root
         if first_party_root is not None
@@ -134,7 +135,7 @@ def index_commit(
         artifacts = 0
         if extractors:
             artifacts = _run_extractors(
-                conn, extractors, files, sha, root, spans_by_module, path_by_module
+                conn, extractors, files, extra_files, sha, root, spans_by_module, path_by_module
             )
 
     return IndexResult(
@@ -219,6 +220,7 @@ def _run_extractors(
     conn: Connection,
     extractors: Sequence[Extractor],
     files: dict[str, bytes],
+    extra_files: dict[str, bytes],
     sha: str,
     first_party_root: str,
     spans_by_module: dict[str, list[ParsedSpan]],
@@ -226,20 +228,25 @@ def _run_extractors(
 ) -> int:
     written = 0
     with tempfile.TemporaryDirectory(prefix="kb-snapshot-") as tmp:
-        for path, content in files.items():
+        for path, content in {**files, **extra_files}.items():
             target = Path(tmp) / path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
-        ctx = ExtractContext(
+        base_ctx = ExtractContext(
             sha=sha,
             materialized_root=tmp,
             first_party_root=first_party_root,
             spans_by_module=spans_by_module,
             path_by_module=path_by_module,
         )
+        prior: list[ExtractedArtifact] = []
         for extractor in extractors:
-            for artifact in extractor.extract(ctx):
+            # second-order extractors see EARLIER extractors' outputs (order is load-bearing)
+            ctx = replace(base_ctx, prior_artifacts=tuple(prior))
+            produced = extractor.extract(ctx)
+            for artifact in produced:
                 artifact_id = write_grounded_artifact(conn, artifact)
                 write_snapshot_entry(conn, sha, artifact.logical_key, artifact_id)
                 written += 1
+            prior.extend(produced)
     return written

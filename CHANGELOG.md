@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Deterministic business-process path extractor** (`kb.extract.deterministic.paths`): the first
+  SECOND-ORDER extractor — `ExtractContext` gained `prior_artifacts` (the pipeline feeds each
+  extractor's outputs to later ones; registration order is load-bearing) and the pipeline now
+  materializes the analyzed repo's `.kb/` directory alongside the Python tree. `PathEngine` (the
+  first shipped increment of the DESIGN §11 seam) BFS-slices the `call_edge` graph from extracted
+  entrypoints (`api_route` / `event_handler` handlers) to functions containing SINK calls — matched
+  textually against a built-in registry (db/http/email/subprocess/file/queue) merged with an
+  optional per-repo `.kb/sinks.yaml` override (strictly validated; the effective registry's digest
+  is folded into artifact identity). One `process_path` per (entrypoint, sink, terminal): shortest
+  chain, cycle-safe, 0-hop supported, depth/path caps retro-flagged in `limitations` (never
+  silent), grounded on EVERY span along the path (roles `entrypoint`/`step`/`terminal` —
+  multi-file provenance). Found paths are exact (`confidence` 1.0); incompleteness is an explicit
+  payload fact. `pyyaml` moved to runtime deps; `summarize`/`embed_text` gained `process_path`
+  branches. The LLM labeler is the next slice.
+- **Tier-1 process-paths HARD gate** (`kb.eval.tier1_processes_test`): hand-labeled oracle (2-hop
+  cross-file chain, 0-hop direct sink, event-handler entrypoint), the flagship artifact grounded
+  across **three files**, cycle no-hang, `.kb/sinks.yaml` override proven end-to-end, no-sink route
+  yields nothing, depth caps honored, re-index determinism. Headline HARD gates: thirteen →
+  **fourteen**.
+
+### Added
+
 - **Call-graph edge extractor** (`kb.extract.deterministic.calls`): the sixth deterministic
   extractor — one `call_edge` artifact per RESOLVED caller→callee pair (`call:{caller}->{callee}`,
   call-site lines aggregated in the payload, the import-edge precedent). Three deterministic
