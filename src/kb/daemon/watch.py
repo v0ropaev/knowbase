@@ -26,6 +26,7 @@ from sqlalchemy import Engine
 
 from kb.daemon.pipeline import IndexResult, index_commit
 from kb.extract.base import Extractor
+from kb.extract.deterministic.calls import CallGraphExtractor
 from kb.extract.deterministic.entities import EntityExtractor
 from kb.extract.deterministic.events import EventExtractor
 from kb.extract.deterministic.fastapi_contract import FastAPIExtractor
@@ -44,6 +45,7 @@ def default_extractors() -> list[Extractor]:
         EntityExtractor(),
         EventExtractor(),
         LibrarySurfaceExtractor(),
+        CallGraphExtractor(),
     ]
 
 

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Call-graph edge extractor** (`kb.extract.deterministic.calls`): the sixth deterministic
+  extractor — one `call_edge` artifact per RESOLVED caller→callee pair (`call:{caller}->{callee}`,
+  call-site lines aggregated in the payload, the import-edge precedent). Three deterministic
+  resolution tiers: same-module calls, imported-name calls (**cross-file** — `from x import f
+  [as g]` and `import x[.y] [as z]; x.y.f()` module-attribute forms, resolved via per-module import
+  tables incl. relative imports), and `self.method()` to a method of the same class. Precision-first:
+  only first-party-resolved edges are emitted; `obj.method(...)`, `getattr`/dynamic, `super()`,
+  inherited self-calls, star imports, decorator/default-arg expressions and class-body calls are
+  documented gaps. Grounded on the caller def span (role `caller`; module span for module-level
+  calls) + the callee def span (role `callee`); direct recursion is a single-span artifact; mutual
+  recursion yields two distinct artifacts (identity rule v2). `framework_versions` empty. Registered
+  in `default_extractors()`; `summarize` / `embed_text` gained a `call_edge` branch. The
+  deterministic foundation under the future business-process extractor (DESIGN §14 item 2).
+- **Tier-1 call-graph HARD gate** (`kb.eval.tier1_calls_test`): extracted edges match a hand-labeled
+  oracle (11 edges across 5 modules); a mutually recursive pair stays two distinct artifacts over an
+  identical evidence span set (extractor-level identity-v2 regression); cross-file provenance (one
+  artifact spans the caller's and callee's files); six blind spots asserted as *known* gaps; nested
+  defs attribute to the innermost function. Headline HARD gates: twelve → **thirteen**.
+
 ## [0.5.0] - 2026-07-07
 
 ### Fixed

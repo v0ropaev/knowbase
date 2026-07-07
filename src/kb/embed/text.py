@@ -57,6 +57,16 @@ def embed_text(kind: str, payload: dict[str, Any]) -> str:
             "fields " + " ".join(str(f) for r in regs for f in r.get("fields", [])),
         ]
         return " ".join(p for p in parts if p.strip())
+    if kind == "call_edge":
+        parts = [
+            head,
+            f"call {payload.get('caller', '')} {payload.get('callee', '')}",
+            f"caller module {payload.get('caller_module', '')}",
+            f"callee module {payload.get('callee_module', '')}",
+            f"resolution {payload.get('resolution', '')}",
+            f"callee kind {payload.get('callee_kind', '')}",
+        ]
+        return " ".join(p for p in parts if p.strip())
     if kind == "description":
         claims = " ".join(str(c.get("text", "")) for c in payload.get("claims", []))
         return f"{payload.get('summary', '')} {claims}".strip() or head
