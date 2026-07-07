@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **LLM labeling of process paths** (`kb describe`, 4th slice): `DESCRIBE_KINDS` gained
+  `process_path`, so the key-gated describe pass now writes a grounded NL name/summary for each
+  materialized business-process path, with a larger facts budget (the path payload —
+  steps/edges/sink — is rich context). Claims are span-validated against the path's own spans
+  (fabricated claims dropped; a path with no surviving claim stores nothing) and the stored
+  description carries `confidence = kept/(kept+dropped)` < 1.0 — the honest pricing of the call
+  graph's unknown-unknowns promised in DESIGN §9. Route/entity/module/package prompts stay
+  byte-identical (no `PROMPT_VERSION` bump). The `semantic_grounding_test` gate gains a
+  process-path fixture (multi-file path via the fixture's own `.kb/sinks.yaml`; real claim kept /
+  fabricated claim dropped); headline HARD gates stay **fourteen**. Closes DESIGN §14 item 2.
 - **Deterministic business-process path extractor** (`kb.extract.deterministic.paths`): the first
   SECOND-ORDER extractor — `ExtractContext` gained `prior_artifacts` (the pipeline feeds each
   extractor's outputs to later ones; registration order is load-bearing) and the pipeline now
@@ -22,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   silent), grounded on EVERY span along the path (roles `entrypoint`/`step`/`terminal` —
   multi-file provenance). Found paths are exact (`confidence` 1.0); incompleteness is an explicit
   payload fact. `pyyaml` moved to runtime deps; `summarize`/`embed_text` gained `process_path`
-  branches. The LLM labeler is the next slice.
+  branches. The LLM labeler ships in the entry above.
 - **Tier-1 process-paths HARD gate** (`kb.eval.tier1_processes_test`): hand-labeled oracle (2-hop
   cross-file chain, 0-hop direct sink, event-handler entrypoint), the flagship artifact grounded
   across **three files**, cycle no-hang, `.kb/sinks.yaml` override proven end-to-end, no-sink route

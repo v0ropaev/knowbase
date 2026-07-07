@@ -18,7 +18,9 @@ from sqlalchemy import Engine, select
 from kb.daemon.pipeline import index_commit
 from kb.eval._fixtures import make_git_repo
 from kb.eval.tier1_api_test import FILES
+from kb.extract.deterministic.calls import CallGraphExtractor
 from kb.extract.deterministic.fastapi_contract import FastAPIExtractor
+from kb.extract.deterministic.paths import ProcessPathExtractor
 from kb.extract.semantic.describe import describe_snapshot
 from kb.extract.semantic.grounding import validate_claims
 from kb.store import models as m
@@ -26,6 +28,32 @@ from kb.store.queries import provenance_for_artifact
 
 REAL = "OrderOut"  # appears in the fixture (schemas.py + the routes' response_model)
 FAKE = "nonexistent_symbol_xyz"  # appears nowhere -> must be dropped as a hallucination
+
+# A process-path fixture (tier1_processes_test style, unique "lp" module names so the shared
+# session DB can't collide): a route handler in ONE file calls a helper in ANOTHER file whose body
+# hits a sink from the fixture's own .kb/sinks.yaml. The handler references OrderOut, so REAL is a
+# token of the path's entrypoint span and must survive validation on the process path too.
+LP_FILES = {
+    ".kb/sinks.yaml": (
+        "version: 1\nextend: true\nsinks:\n"
+        '  - name: label_write\n    patterns: ["*.record_label"]\n'
+    ),
+    "src/lp/__init__.py": "",
+    "src/lp/schemas.py": "class OrderOut:\n    order_id: int\n",
+    "src/lp/api.py": (
+        "from fastapi import APIRouter\n"
+        "from lp.schemas import OrderOut\n"
+        "from lp.billing import charge\n\n"
+        "router = APIRouter()\n\n\n"
+        "@router.post('/labels')\n"
+        "def create_label():\n    charge()\n    return OrderOut()\n"
+    ),
+    "src/lp/billing.py": (
+        "class Books:\n    def record_label(self, kind):\n        return kind\n\n\n"
+        "books = Books()\n\n\n"
+        "def charge():\n    return books.record_label('label')\n"
+    ),
+}
 
 
 class _StubProvider:
@@ -148,3 +176,29 @@ def test_package_descriptions_are_grounded(engine: Engine, tmp_path: Path) -> No
     with engine.connect() as conn:
         prov_files = {p.file_path for p in provenance_for_artifact(conn, sha, row.logical_key)}
     assert prov_files  # grounded on the package's code spans (>= 1 file)
+
+
+def test_process_path_descriptions_are_grounded(engine: Engine, tmp_path: Path) -> None:
+    """The same span-validation gate covers LLM-labeled process paths (DESIGN.md §9, §14 item 2)."""
+    sha = make_git_repo(tmp_path, [LP_FILES])[0]
+    index_commit(
+        engine,
+        str(tmp_path),
+        sha,
+        # ORDER is load-bearing: ProcessPathExtractor is second-order and must run last.
+        extractors=[FastAPIExtractor(), CallGraphExtractor(), ProcessPathExtractor()],
+        first_party_root="src",
+    )
+    describe_snapshot(engine, sha, _StubProvider())
+
+    rows = [r for r in _description_rows(engine, sha) if r.payload["target_kind"] == "process_path"]
+    assert len(rows) == 1  # exactly the one materialized path gets a label
+    row = rows[0]
+    assert row.logical_key == "desc:process:lp.api.create_label->label_write@lp.billing.charge"
+    symbols = [c["symbol"] for c in row.payload["claims"]]
+    assert REAL in symbols  # the grounded claim survives on the process path
+    assert FAKE not in symbols  # adversarial: the fabricated claim is dropped here too
+    assert row.is_deterministic is False  # surfaced as llm_grounded
+    with engine.connect() as conn:
+        prov_files = {p.file_path for p in provenance_for_artifact(conn, sha, row.logical_key)}
+    assert len(prov_files) >= 2  # grounded across the path's files (multi-file provenance)

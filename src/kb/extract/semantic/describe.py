@@ -1,14 +1,15 @@
 """LLM-grounded NL descriptions over a snapshot — a separate, key-gated pass (DESIGN.md §4, §9).
 
-For each ``api_route`` / ``entity`` artifact, each first-party module (file), AND each first-party
-package, an LLM writes a short summary plus structured claims; each claim is validated against the
-target's own grounding spans (``grounding.validate_claims``), unvalidated claims are dropped, and —
-if anything survives — a ``description`` artifact is stored grounded on the SAME spans (role
-``describes``, ``is_deterministic=False``). Modules are grounded on ALL of the file's spans; a
-package overview is grounded on its own and its direct-child modules' spans and synthesizes richer
-*context* (import edges + public surface + member-module summaries) while its claims stay
-code-grounded. Never on the ``kb index`` path. Idempotent per (model, prompt): ``artifact_id`` folds
-in model_id + prompt.
+For each ``api_route`` / ``entity`` / ``process_path`` artifact, each first-party module (file),
+AND each first-party package, an LLM writes a short summary plus structured claims; each claim is
+validated against the target's own grounding spans (``grounding.validate_claims``), unvalidated
+claims are dropped, and — if anything survives — a ``description`` artifact is stored grounded on
+the SAME spans (role ``describes``, ``is_deterministic=False``). Modules are grounded on ALL of the
+file's spans; a package overview is grounded on its own and its direct-child modules' spans and
+synthesizes richer *context* (import edges + public surface + member-module summaries) while its
+claims stay code-grounded; a process-path label is grounded on every span along the materialized
+path, so its confidence (kept/(kept+dropped)) honestly stays < 1.0. Never on the ``kb index`` path.
+Idempotent per (model, prompt): ``artifact_id`` folds in model_id + prompt.
 """
 
 from __future__ import annotations
@@ -36,9 +37,11 @@ from kb.store.writer import write_grounded_artifact, write_snapshot_entry
 EXTRACTOR_ID = "llm_describe"
 EXTRACTOR_VERSION = "1"
 PROMPT_VERSION = "1"
-DESCRIBE_KINDS = ("api_route", "entity")
+DESCRIBE_KINDS = ("api_route", "entity", "process_path")
 _BODY_CAP = 6000  # prompt source-span body cap (validation still runs over every span)
+_DEFAULT_FACTS_CAP = 800  # facts budget for route/entity prompts (kept byte-identical)
 _PACKAGE_FACTS_CAP = 4000  # larger facts budget for rich package overviews (context only)
+_PROCESS_FACTS_CAP = 4000  # larger facts budget for process payloads (steps/edges/sink context)
 _FACT_LIST_CAP = 40  # cap each import/surface fact list (context only; validation runs over spans)
 
 _SYSTEM = (
@@ -57,7 +60,7 @@ class DescribeResult:
 
 
 def describe_snapshot(engine: Engine, sha: str, provider: LLMProvider) -> DescribeResult:
-    """Generate grounded descriptions for the snapshot's api_route/entity artifacts and modules."""
+    """Grounded descriptions for the snapshot's route/entity/process-path artifacts + modules."""
     join = m.snapshot_entry.join(
         m.artifact, m.artifact.c.artifact_id == m.snapshot_entry.c.artifact_id
     )
@@ -86,6 +89,9 @@ def describe_snapshot(engine: Engine, sha: str, provider: LLMProvider) -> Descri
                 target_kind=target.kind,
                 facts=target.payload,
                 spans=spans,
+                facts_cap=_PROCESS_FACTS_CAP
+                if target.kind == "process_path"
+                else _DEFAULT_FACTS_CAP,
             )
             described += int(stored)
             dropped_total += dropped
@@ -135,7 +141,7 @@ def _describe_one(
     target_kind: str,
     facts: dict[str, Any],
     spans: list[ArtifactSpanRow],
-    facts_cap: int = 800,
+    facts_cap: int = _DEFAULT_FACTS_CAP,
 ) -> tuple[bool, int]:
     """Describe one target (artifact / module / package) from its grounding spans.
 
@@ -177,7 +183,11 @@ def _describe_one(
 
 
 def _build_prompt(
-    kind: str, facts: dict[str, Any], spans: list[ArtifactSpanRow], *, facts_cap: int = 800
+    kind: str,
+    facts: dict[str, Any],
+    spans: list[ArtifactSpanRow],
+    *,
+    facts_cap: int = _DEFAULT_FACTS_CAP,
 ) -> str:
     facts_json = json.dumps(facts, default=str)[:facts_cap]
     parts: list[str] = []
