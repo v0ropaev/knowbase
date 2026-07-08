@@ -5,6 +5,33 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Events v2 — call-form registrations** (`kb.extract.deterministic.events`): the extractor now
+  also extracts module-level SQLAlchemy `event.listen(Target, "event", fn)` statements — the v1
+  KNOWN GAP — as a new registration family `sqlalchemy_listen`. `fn` must resolve to a first-party
+  top-level function of the same module or an imported one (reusing the calls.py import-table
+  machinery, now shared at module level); the registration attaches to the HANDLER's artifact,
+  which may live in another module than the `listen()` call, and the artifact gains a grounding
+  edge on the registering file's module span (new role `registration_site`) — a call-form
+  registration wired in a third module grounds ONE artifact across THREE files (handler + target
+  class + registration site). Only module-level calls are extracted (they run deterministically at
+  import time); `listen(...)` inside a function/class body, lambda/attribute listeners, and the
+  bare `from sqlalchemy.event import listen` form are documented gaps, never a wrong guess.
+  Registrations gained `form`/`registration_module`/`registration_line` payload fields. The Tier-1
+  events gate gains three tests (call-form extracted; three-file provenance; the two new gaps
+  asserted); headline HARD gates stay **fifteen**.
+
+### Changed
+
+- **`events` extractor version 1 → 2**: all `event_handler` artifact ids are recomputed on the
+  next index (idempotent re-index rewrites snapshots; superseded rows are orphaned — GC remains
+  deferred, harmless); `kb describe` regenerates event-handler descriptions on its next key-gated
+  run. Purely-decorator handlers keep semantically identical payloads (only the new registration
+  fields are added).
+
 ## [0.7.0] - 2026-07-08
 
 ### Added

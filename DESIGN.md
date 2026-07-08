@@ -261,10 +261,15 @@ test.)
   user code); scored against **griffe** as a dev-only independent static oracle (never on `index`).
 - **(d)** Event-handler extractor *(shipped)*: one `event_handler` per handler carrying decorator
   registrations — pydantic `@field_validator`/`@model_validator`, FastAPI `@app.on_event`,
-  SQLAlchemy `@event.listens_for` (stacked decorators aggregate in `payload.registrations`; one
-  artifact per handler because `artifact_id` is content-addressed over spans + extractor, §6).
-  Grounded on the handler span + cross-file on the listened-to class; hand-labeled Tier-1 gate.
-  Known gaps (asserted): call-form `event.listen(...)`, lifespan, pydantic-v1, dynamic names.
+  SQLAlchemy `@event.listens_for` — AND module-level call-form `event.listen(Target, "e", fn)`
+  registrations (family `sqlalchemy_listen`; `fn` resolved same-module or via the calls.py import
+  tables — the handler may live in another module than the listen; grounded additionally on the
+  registering file's module span, role `registration_site`). Stacked decorators and call sites
+  aggregate in `payload.registrations`; one artifact per handler. Grounded on the handler span +
+  cross-file on the listened-to class; hand-labeled Tier-1 gate incl. a three-file provenance case
+  (handler + target class + registration site). Known gaps (asserted): `listen(...)` inside a
+  function/class body (conditional), lambda/attribute `fn`, the bare
+  `from sqlalchemy.event import listen` form, lifespan, pydantic-v1, dynamic names.
 - **(e)** Call-graph edge extractor *(shipped)*: one `call_edge` per RESOLVED caller→callee pair,
   three deterministic tiers (same-module; imported — **cross-file**; `self.` method of the same
   class); precision-first — only first-party-resolved edges are emitted, recall bounded by
@@ -404,7 +409,7 @@ freshness(current|stale@sha)`, with a deterministic tie-break for reproducible e
 | Module | Responsibility | Key tech |
 |--------|----------------|----------|
 | `kb.structural` | Parse Python without executing it; enumerate symbols/imports/call-sites with per-SHA byte/line ranges; compute content-addressed span identity; incremental reparse. Hidden behind a `StructuralIndex`/`PathEngine` interface so a SCIP backend can replace tree-sitter later. | tree-sitter + tree-sitter-python (canonical bindings) |
-| `kb.extract.deterministic` | No-LLM extractors → exact artifacts (confidence=1.0): import graph; FastAPI API contract (static, cross-file grounded); domain entities (pydantic/dataclass/SQLAlchemy, static, cross-file links to referenced entities, hand-labeled gate); library public-API surface (static tree-sitter, cross-file `__init__` re-export resolution, independent griffe-oracle gate); event handlers (pydantic validators / FastAPI `on_event` / SQLAlchemy `listens_for`, static, cross-file target grounding, hand-labeled gate); call-graph edges (per-edge artifacts, three resolution tiers, caller+callee span grounding, hand-labeled gate); process paths (`paths.PathEngine` — the first shipped increment of the PathEngine seam — BFS to sink-registry matches, multi-file grounded, registry digest identity-bearing). | grimp, tree-sitter queries; griffe (dev-only oracle) |
+| `kb.extract.deterministic` | No-LLM extractors → exact artifacts (confidence=1.0): import graph; FastAPI API contract (static, cross-file grounded); domain entities (pydantic/dataclass/SQLAlchemy, static, cross-file links to referenced entities, hand-labeled gate); library public-API surface (static tree-sitter, cross-file `__init__` re-export resolution, independent griffe-oracle gate); event handlers (pydantic validators / FastAPI `on_event` / SQLAlchemy `listens_for` + module-level call-form `listen`, static, cross-file target + registration-site grounding, hand-labeled gate); call-graph edges (per-edge artifacts, three resolution tiers, caller+callee span grounding, hand-labeled gate); process paths (`paths.PathEngine` — the first shipped increment of the PathEngine seam — BFS to sink-registry matches, multi-file grounded, registry digest identity-bearing). | grimp, tree-sitter queries; griffe (dev-only oracle) |
 | `kb.introspect` | Eval-only runtime oracle: runs a FastAPI app in a network-blocked sandbox and emits `app.openapi()` for the Tier-1 API gate. Never on the index path. | subprocess sandbox, fastapi |
 | `kb.embed` | Replaceable embedding adapters + snapshot population for `search_knowledge`. Torch isolated behind the `embed` extra and a lazy import. | sentence-transformers (default), OpenAI (optional), pgvector |
 | `kb.rag` | Frozen pgvector RAG-over-source baseline — the "other arm" of the knowledge-vs-RAG A/B (no provenance/grounding). | deterministic line-window chunker, pgvector |
@@ -490,8 +495,9 @@ Review fact-checked these against current (2026) sources. Caveats are first-clas
 
 1. Second deterministic family: **entities (pydantic/dataclass/SQLAlchemy) — shipped** (static
    tree-sitter, hand-labeled Tier-1 gate); **events — shipped** (decorator registrations for
-   pydantic/FastAPI/SQLAlchemy, static tree-sitter, hand-labeled Tier-1 gate; call-form
-   `event.listen` deferred).
+   pydantic/FastAPI/SQLAlchemy plus module-level call-form `event.listen` — v2, static
+   tree-sitter, hand-labeled Tier-1 gate; function-body/lambda/bare-import forms and lifespan
+   stay documented gaps).
 2. The **one** grounded business-process extractor (named real path + labeler + validator +
    deterministic sub-property gate) — **shipped**: the `call_edge` extractor + Tier-1 calls gate;
    the `process_path` builder (PathEngine BFS + sink registry + `.kb/sinks.yaml` override,
