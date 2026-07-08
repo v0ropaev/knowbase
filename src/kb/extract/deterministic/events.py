@@ -1,27 +1,32 @@
 """Deterministic event-handler extractor — pydantic / FastAPI / SQLAlchemy hooks (DESIGN.md §8).
 
-Produces one ``event_handler`` artifact per HANDLER function/method that carries decorator
-registrations: pydantic ``@field_validator(...)`` / ``@model_validator(...)`` methods, FastAPI
-``@app.on_event("...")`` handlers, and SQLAlchemy ``@event.listens_for(Target, "...")`` listeners.
-All of a handler's registrations (stacked decorators included) live in ``payload.registrations`` —
-one artifact per handler, not per decorator: the handler is the grounded unit and its registrations
-are payload facts (the entity-fields precedent). (Historically this also dodged an identity-v1
-collision for same-evidence artifacts; identity rule v2 folds ``logical_key`` into ``artifact_id``,
-so the aggregation is now purely a design choice.)
+Produces one ``event_handler`` artifact per HANDLER function/method that carries registrations —
+decorator-form: pydantic ``@field_validator(...)`` / ``@model_validator(...)`` methods, FastAPI
+``@app.on_event("...")`` handlers, SQLAlchemy ``@event.listens_for(Target, "...")`` listeners —
+AND call-form: module-level SQLAlchemy ``event.listen(Target, "name", fn)`` statements (family
+``sqlalchemy_listen``), where ``fn`` resolves to a first-party top-level function of the same
+module or an imported one (the calls.py import-table machinery). ALL of a handler's registrations
+(stacked decorators and call sites included, possibly from OTHER modules) live in
+``payload.registrations`` — one artifact per handler: the handler is the grounded unit and its
+registrations are payload facts (the entity-fields precedent).
 
-Grounded on the handler span (role ``handler`` — the span includes its decorators), plus the
-enclosing model class (role ``owner_class``, pydantic) and every resolved listened-to class (role
-``target_class``, SQLAlchemy — resolved cross-file like the FastAPI ``response_model``).
-``framework_versions`` folds only the frameworks the handler's registrations belong to.
+Grounded on the handler span (role ``handler``), plus the enclosing model class (role
+``owner_class``, pydantic), every resolved listened-to class (role ``target_class``, cross-file),
+and — for call-form registrations — the registering file's module span (role ``registration_site``:
+there is no statement-level span, and any edit to that file must re-extract the handler, which the
+module span's identity guarantees). Only MODULE-LEVEL ``listen(...)`` calls are extracted: they run
+deterministically at import time, so "this handler is registered" holds at confidence 1.0; a call
+inside a function/class body is conditional and stays a documented gap. A top-level call under an
+``if`` is extracted as unconditional (the calls.py precedent).
 
-Fully static: re-parses each handler span's source with tree-sitter; it never imports or executes
-user code. Known gaps (documented, surfaced by the eval gate, never a silent wrong guess): the
-call-form ``event.listen(Target, "name", fn)``, FastAPI lifespan context managers, pydantic v1
-``@validator``/``@root_validator``, and dynamic event names (``@app.on_event(EVENT)`` is skipped —
-the event name is load-bearing; a dynamic ``listens_for`` event or ``field_validator`` field is
-kept but flagged in ``payload.limitations``). Detection is by decorator shape only (no data-flow):
-any ``*.on_event("literal")`` matches, and pydantic validators are not verified against a
-``BaseModel`` base — ``detection_signals`` keeps that honest.
+Fully static: re-parses span sources with tree-sitter; it never imports or executes user code.
+Known gaps (documented, surfaced by the eval gate, never a silent wrong guess): ``listen(...)``
+inside a function/class body, a lambda/attribute/non-first-party ``fn`` (skipped — handler identity
+is load-bearing), the bare ``from sqlalchemy.event import listen`` form, FastAPI lifespan context
+managers, pydantic v1 ``@validator``/``@root_validator``, and dynamic event names
+(``@app.on_event(EVENT)`` is skipped; a dynamic ``listens_for``/``listen`` event or
+``field_validator`` field is kept but flagged in ``payload.limitations``). Detection is by shape
+only (no data-flow); ``detection_signals`` keeps that honest.
 """
 
 from __future__ import annotations
@@ -36,10 +41,11 @@ import tree_sitter_python as tsp
 from tree_sitter import Language, Node, Parser
 
 from kb.extract.base import DerivedEdge, ExtractContext, ExtractedArtifact
+from kb.extract.deterministic.calls import _caller_scan_root, _import_table, _iter_calls
 from kb.structural.interface import ParsedSpan
 
 EXTRACTOR_ID = "events"
-EXTRACTOR_VERSION = "1"
+EXTRACTOR_VERSION = "2"
 
 _LANGUAGE = Language(tsp.language())
 _VERSIONED = ("pydantic", "fastapi", "sqlalchemy")
@@ -48,7 +54,9 @@ _FAMILY_FRAMEWORK = {
     "pydantic_model_validator": "pydantic",
     "fastapi_on_event": "fastapi",
     "sqlalchemy_listens_for": "sqlalchemy",
+    "sqlalchemy_listen": "sqlalchemy",
 }
+_SQLALCHEMY_FAMILIES = ("sqlalchemy_listens_for", "sqlalchemy_listen")
 
 
 @dataclass(frozen=True)
@@ -57,9 +65,13 @@ class _Registration:
     event: str | None = None
     fields: list[str] = field(default_factory=list)
     mode: str | None = None
-    target: str | None = None  # listens_for first positional, raw text
+    target: str | None = None  # listens_for/listen first positional, raw text
     decorator_object: str | None = None
     limitations: list[str] = field(default_factory=list)
+    form: str = "decorator"  # "decorator" | "call"
+    registration_module: str | None = None  # call-form: the module carrying the listen() statement
+    registration_line: int | None = None  # call-form: 1-based line of the listen() call
+    site_span_id: bytes | None = None  # call-form: the registering file's module span
 
 
 class EventExtractor:
@@ -78,19 +90,112 @@ class EventExtractor:
             for span in spans
             if span.span_kind == "class"
         }
-        artifacts: list[ExtractedArtifact] = []
+        fn_index: dict[tuple[str, str], ParsedSpan] = {}  # top-level functions, per module
+        for module, spans in ctx.spans_by_module.items():
+            for span in spans:
+                parent, _, name = span.fq_symbol_path.rpartition(".")
+                if span.span_kind == "function" and parent == module:
+                    fn_index[(module, name)] = span
+
+        # Pass A — decorator registrations, attached to the decorated handler itself.
+        entries: dict[str, tuple[str, ParsedSpan, list[_Registration]]] = {}
         for module, spans in ctx.spans_by_module.items():
             for span in spans:
                 if span.span_kind not in ("function", "method"):
                     continue
                 registrations = self._parse_registrations(span)
                 if registrations:
-                    artifacts.append(
-                        self._build_artifact(
-                            module, span, registrations, class_index, class_by_fq, versions
-                        )
+                    entries[span.fq_symbol_path] = (module, span, registrations)
+
+        # Pass B — module-level call-form registrations, attached to the RESOLVED handler
+        # (which may live in another module). Sorted before merging: dict order differs between
+        # full and incremental indexing, and the payload must be byte-identical across both.
+        call_regs = self._call_form_registrations(ctx, fn_index)
+        call_regs.sort(
+            key=lambda item: (
+                item[2].registration_module or "",
+                item[2].registration_line or 0,
+                item[2].event or "",
+                item[1].fq_symbol_path,
+            )
+        )
+        for handler_module, handler_span, registration in call_regs:
+            entry = entries.get(handler_span.fq_symbol_path)
+            if entry is None:
+                entries[handler_span.fq_symbol_path] = (
+                    handler_module, handler_span, [registration]
+                )
+            else:
+                entry[2].append(registration)
+
+        return [
+            self._build_artifact(module, span, registrations, class_index, class_by_fq, versions)
+            for _fq, (module, span, registrations) in sorted(entries.items())
+        ]
+
+    # --- call-form scan (module-level event.listen(Target, "event", fn)) -----
+
+    def _call_form_registrations(
+        self, ctx: ExtractContext, fn_index: dict[tuple[str, str], ParsedSpan]
+    ) -> list[tuple[str, ParsedSpan, _Registration]]:
+        """``(handler_module, handler_span, registration)`` per resolved module-level listen()."""
+        module_set = set(ctx.spans_by_module)
+        out: list[tuple[str, ParsedSpan, _Registration]] = []
+        for module, spans in ctx.spans_by_module.items():
+            module_span = next((s for s in spans if s.span_kind == "module"), None)
+            if module_span is None:
+                continue
+            scan_root = _caller_scan_root(self._parser, module_span)
+            if scan_root is None:
+                continue
+            table = None  # import table only if the module actually has a listen() candidate
+            for call in _iter_calls(scan_root):
+                callee = call.child_by_field_name("function")
+                if callee is None or callee.type != "attribute":
+                    continue  # bare `listen(...)` (from-import form) -> documented gap
+                if _text(callee.child_by_field_name("attribute")) != "listen":
+                    continue
+                positional = _positional_args(call.child_by_field_name("arguments"))
+                if len(positional) < 3:
+                    continue  # not a registration shape (e.g. sock.listen(5))
+                handler_node = positional[2]
+                if handler_node.type != "identifier":
+                    continue  # lambda / attribute fn -> documented gap (identity load-bearing)
+                handler_name = _text(handler_node) or ""
+                handler_module, handler_span = module, fn_index.get((module, handler_name))
+                if handler_span is None:
+                    if table is None:
+                        table = _import_table(self._parser, ctx, module, module_set)
+                    bound = table.symbols.get(handler_name)
+                    if bound is None:
+                        continue  # unresolvable fn -> documented gap, never a wrong guess
+                    handler_span = fn_index.get(bound)
+                    handler_module = bound[0]
+                if handler_span is None:
+                    continue
+                limitations: list[str] = []
+                event: str | None = None
+                if positional[1].type == "string":
+                    event = _string_literal_value(positional[1])
+                else:
+                    limitations.append("dynamic_event_name")
+                out.append(
+                    (
+                        handler_module,
+                        handler_span,
+                        _Registration(
+                            family="sqlalchemy_listen",
+                            event=event,
+                            target=_text(positional[0]),
+                            limitations=limitations,
+                            form="call",
+                            registration_module=module,
+                            registration_line=module_span.start_line + call.start_point[0],
+                            site_span_id=module_span.span_id,
+                        ),
                     )
-        return artifacts
+                )
+        return out
 
     # --- registration parsing (static, re-parse the span) -------------------
 
@@ -197,7 +302,7 @@ class EventExtractor:
         for reg in registrations:
             limitations.extend(reg.limitations)
             target_matches: list[tuple[str, ParsedSpan]] = []
-            if reg.family == "sqlalchemy_listens_for" and reg.target:
+            if reg.family in _SQLALCHEMY_FAMILIES and reg.target:
                 target_matches = class_index.get(reg.target.rsplit(".", 1)[-1], [])
                 for _tgt_module, tgt_span in target_matches:
                     grounding.setdefault(
@@ -205,9 +310,14 @@ class EventExtractor:
                     )
                 if not target_matches:
                     limitations.append("target_not_first_party")
+            if reg.site_span_id is not None:
+                grounding.setdefault(
+                    reg.site_span_id, DerivedEdge(reg.site_span_id, "registration_site")
+                )
             reg_payloads.append(
                 {
                     "family": reg.family,
+                    "form": reg.form,
                     "event": reg.event,
                     "fields": reg.fields,
                     "mode": reg.mode,
@@ -219,6 +329,8 @@ class EventExtractor:
                         for (m, s) in target_matches
                     ],
                     "decorator_object": reg.decorator_object,
+                    "registration_module": reg.registration_module,
+                    "registration_line": reg.registration_line,
                 }
             )
 
@@ -229,7 +341,10 @@ class EventExtractor:
             "owner_class": owner_class,
             "families": families,
             "registrations": reg_payloads,
-            "detection_signals": [f"{family}_decorator" for family in families],
+            "detection_signals": sorted(
+                {f"{reg.family}_{'call' if reg.form == 'call' else 'decorator'}"
+                 for reg in registrations}
+            ),
             "span_mapping": "exact",
             "limitations": limitations,
         }

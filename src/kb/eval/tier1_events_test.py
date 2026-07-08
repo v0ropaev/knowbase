@@ -1,13 +1,15 @@
 """HARD GATE — Tier 1: event handlers vs a hand-labeled oracle (DESIGN.md §9, §14).
 
-The extractor is static and decorator-scoped, so the oracle is hand-labeled (a runtime oracle would
-execute user code): ``EXPECTED_EVENTS`` enumerates every decorator registration in the fixture (one
-``event_handler`` artifact per handler; stacked decorators appear as multiple entries in its
-``payload.registrations``). The thesis assertions: a SQLAlchemy listener is grounded CROSS-FILE on
-the class it listens to (the listener lives in ``hooks.py``, the class in ``db.py``); pydantic
-validators are grounded on their owner model class; and the two documented blind spots — the
-call-form ``event.listen(...)`` and a dynamic ``@app.on_event(EVENT)`` name — are asserted as
-*known* gaps, never a silent loss.
+The extractor is static, so the oracle is hand-labeled (a runtime oracle would execute user code):
+``EXPECTED_EVENTS`` enumerates every registration in the fixture — decorator-form AND module-level
+call-form ``event.listen(...)`` (one ``event_handler`` artifact per handler; stacked decorators
+and call sites appear as multiple entries in its ``payload.registrations``). The thesis
+assertions: a SQLAlchemy listener is grounded CROSS-FILE on the class it listens to; a call-form
+registration whose listen() lives in a THIRD module grounds ONE artifact across three files
+(handler + target class + registration site); pydantic validators are grounded on their owner
+model class; and the documented blind spots — ``listen(...)`` inside a function body, a lambda
+listener, and a dynamic ``@app.on_event(EVENT)`` name — are asserted as *known* gaps, never a
+silent loss.
 """
 
 from __future__ import annotations
@@ -51,7 +53,7 @@ FILES = {
         "    id: Mapped[int] = mapped_column(primary_key=True)\n"
     ),
     # ... and its listeners in a DIFFERENT file (cross-file grounding), incl. stacked decorators,
-    # a non-first-party target, and the call-form KNOWN GAP.
+    # a non-first-party target, and a same-module call-form registration.
     "src/shop/hooks.py": (
         "from sqlalchemy import event\n"
         "from sqlalchemy.orm import Session\n"
@@ -64,7 +66,19 @@ FILES = {
         "@event.listens_for(Session, 'before_flush')\n"
         "def on_flush(session, ctx, instances):\n    pass\n\n\n"
         "def audit_update(mapper, connection, target):\n    pass\n\n\n"
+        "def audit_delete(mapper, connection, target):\n    pass\n\n\n"
         "event.listen(OrderRow, 'before_update', audit_update)\n"
+    ),
+    # a THIRD module wires an imported handler (three-file provenance), plus the two call-form
+    # KNOWN GAPS: listen() inside a function body and a lambda listener
+    "src/shop/wiring.py": (
+        "from sqlalchemy import event\n"
+        "from shop.db import OrderRow\n"
+        "from shop.hooks import audit_delete\n\n\n"
+        "def setup():\n"
+        "    event.listen(OrderRow, 'after_insert', audit_delete)\n\n\n"
+        "event.listen(OrderRow, 'after_delete', audit_delete)\n"
+        "event.listen(OrderRow, 'before_insert', lambda m, c, t: None)\n"
     ),
     # fastapi lifecycle + the dynamic-event-name KNOWN GAP
     "src/shop/main.py": (
@@ -88,8 +102,11 @@ EXPECTED_EVENTS = {
     ("sqlalchemy_listens_for", "after_insert", "shop.hooks.audit_multi", "OrderRow"),
     ("sqlalchemy_listens_for", "after_update", "shop.hooks.audit_multi", "OrderRow"),
     ("sqlalchemy_listens_for", "before_flush", "shop.hooks.on_flush", "Session"),
+    ("sqlalchemy_listen", "before_update", "shop.hooks.audit_update", "OrderRow"),
+    ("sqlalchemy_listen", "after_delete", "shop.hooks.audit_delete", "OrderRow"),
 }
-KNOWN_GAP_CALL_FORM = "shop.hooks.audit_update"  # event.listen(...) — no decorator, invisible
+KNOWN_GAP_FUNCTION_BODY_EVENT = "after_insert"  # listen() inside setup() — conditional, skipped
+KNOWN_GAP_LAMBDA_EVENT = "before_insert"  # lambda listener — no handler span, skipped
 KNOWN_GAP_DYNAMIC_EVENT = "shop.main.on_stop"  # @app.on_event(EVENT) — dynamic name, skipped
 
 
@@ -138,9 +155,63 @@ def test_fields_mode_and_flags_captured(engine: Engine, tmp_path: Path) -> None:
     assert "dynamic_field_names" in dynamic["limitations"]  # ... but honestly flagged
 
 
-def test_call_form_listen_is_a_known_gap(engine: Engine, tmp_path: Path) -> None:
+def test_call_form_listen_extracted(engine: Engine, tmp_path: Path) -> None:
+    """The v1 call-form KNOWN GAP is now extracted: same-module event.listen(...) registration."""
     sha = _index(engine, tmp_path)
-    assert all(p["handler"] != KNOWN_GAP_CALL_FORM for p in _payloads(engine, sha))
+    update = next(p for p in _payloads(engine, sha) if p["handler"] == "shop.hooks.audit_update")
+    assert update["families"] == ["sqlalchemy_listen"]
+    reg = update["registrations"][0]
+    assert reg["form"] == "call"
+    assert reg["target_resolved"] is True
+    assert reg["registration_module"] == "shop.hooks"
+    assert update["detection_signals"] == ["sqlalchemy_listen_call"]
+    with engine.connect() as conn:
+        prov = {
+            (p.file_path, p.role)
+            for p in provenance_for_artifact(conn, sha, "event:shop.hooks.audit_update")
+        }
+    assert prov == {
+        ("src/shop/hooks.py", "handler"),
+        ("src/shop/db.py", "target_class"),
+        ("src/shop/hooks.py", "registration_site"),  # module span != function span, same file
+    }
+
+
+def test_cross_module_listen_grounded_three_files(engine: Engine, tmp_path: Path) -> None:
+    """listen() in wiring.py registers a handler from hooks.py on a class from db.py — ONE
+    artifact grounded across THREE files."""
+    sha = _index(engine, tmp_path)
+    delete = next(p for p in _payloads(engine, sha) if p["handler"] == "shop.hooks.audit_delete")
+    assert delete["handler_module"] == "shop.hooks"  # the handler's module, not the wiring's
+    assert delete["registrations"][0]["registration_module"] == "shop.wiring"
+    with engine.connect() as conn:
+        prov = {
+            (p.file_path, p.role)
+            for p in provenance_for_artifact(conn, sha, "event:shop.hooks.audit_delete")
+        }
+    assert prov == {
+        ("src/shop/hooks.py", "handler"),
+        ("src/shop/db.py", "target_class"),
+        ("src/shop/wiring.py", "registration_site"),
+    }
+
+
+def test_listen_inside_function_body_is_a_known_gap(engine: Engine, tmp_path: Path) -> None:
+    """The listen() inside setup() is conditional (runs only if setup() runs) — never extracted."""
+    sha = _index(engine, tmp_path)
+    delete = next(p for p in _payloads(engine, sha) if p["handler"] == "shop.hooks.audit_delete")
+    events = [r["event"] for r in delete["registrations"]]
+    assert events == ["after_delete"]  # only the top-level registration ...
+    assert KNOWN_GAP_FUNCTION_BODY_EVENT not in events  # ... never the one inside setup()
+
+
+def test_lambda_listener_is_a_known_gap(engine: Engine, tmp_path: Path) -> None:
+    """A lambda listener has no handler span to ground — skipped, never a wrong guess."""
+    sha = _index(engine, tmp_path)
+    all_events = {
+        reg["event"] for p in _payloads(engine, sha) for reg in p["registrations"]
+    }
+    assert KNOWN_GAP_LAMBDA_EVENT not in all_events
 
 
 def test_dynamic_event_name_is_a_known_gap(engine: Engine, tmp_path: Path) -> None:

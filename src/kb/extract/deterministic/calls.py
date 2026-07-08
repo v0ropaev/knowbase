@@ -168,47 +168,10 @@ class CallGraphExtractor:
     # --- import table ---------------------------------------------------------
 
     def _import_table(self, ctx: ExtractContext, module: str, module_set: set[str]) -> _ImportTable:
-        symbols: dict[str, tuple[str, str]] = {}
-        modules: dict[str, str] = {}
-        root = self._parse_file(ctx, module)
-        if root is None:
-            return _ImportTable(symbols, modules)
-        base = _relative_base(module, ctx.path_by_module.get(module, ""))
-        for stmt in _iter_import_statements(root):
-            if stmt.type == "import_from_statement":
-                module_ref = stmt.child_by_field_name("module_name")
-                if module_ref is None:
-                    continue
-                target = _resolve_module_ref(module_ref, base)
-                if target is None:
-                    continue
-                for name_node in stmt.children_by_field_name("name"):
-                    exposed, original = _import_alias(name_node)
-                    if exposed is None or original is None:  # wildcard -> nothing
-                        continue
-                    symbols[exposed] = (target, original)
-                    if f"{target}.{original}" in module_set:  # `from pkg import sub` (a module)
-                        modules[exposed] = f"{target}.{original}"
-            else:  # plain import_statement
-                for name_node in stmt.children_by_field_name("name"):
-                    if name_node.type == "dotted_name":  # import x.y
-                        dotted = _text(name_node) or ""
-                        if dotted:
-                            modules[dotted] = dotted
-                            modules.setdefault(dotted.split(".")[0], dotted.split(".")[0])
-                    elif name_node.type == "aliased_import":  # import x.y as z
-                        original = _text(name_node.child_by_field_name("name"))
-                        alias = _text(name_node.child_by_field_name("alias"))
-                        if original and alias:
-                            modules[alias] = original
-        return _ImportTable(symbols, modules)
+        return _import_table(self._parser, ctx, module, module_set)
 
     def _parse_file(self, ctx: ExtractContext, module: str) -> Node | None:
-        path = ctx.path_by_module.get(module)
-        if path is None:
-            return None
-        source = (Path(ctx.materialized_root) / path).read_bytes()
-        return self._parser.parse(source).root_node
+        return _parse_file(self._parser, ctx, module)
 
     def _caller_scan_root(self, span: ParsedSpan) -> Node | None:
         return _caller_scan_root(self._parser, span)
@@ -245,10 +208,59 @@ class CallGraphExtractor:
 # --- module-level helpers (kept local; mirror the other deterministic extractors) ----
 
 
+def _import_table(
+    parser: Parser, ctx: ExtractContext, module: str, module_set: set[str]
+) -> _ImportTable:
+    """Per-module import bindings (shared with the events call-form scan)."""
+    symbols: dict[str, tuple[str, str]] = {}
+    modules: dict[str, str] = {}
+    root = _parse_file(parser, ctx, module)
+    if root is None:
+        return _ImportTable(symbols, modules)
+    base = _relative_base(module, ctx.path_by_module.get(module, ""))
+    for stmt in _iter_import_statements(root):
+        if stmt.type == "import_from_statement":
+            module_ref = stmt.child_by_field_name("module_name")
+            if module_ref is None:
+                continue
+            target = _resolve_module_ref(module_ref, base)
+            if target is None:
+                continue
+            for name_node in stmt.children_by_field_name("name"):
+                exposed, original = _import_alias(name_node)
+                if exposed is None or original is None:  # wildcard -> nothing
+                    continue
+                symbols[exposed] = (target, original)
+                if f"{target}.{original}" in module_set:  # `from pkg import sub` (a module)
+                    modules[exposed] = f"{target}.{original}"
+        else:  # plain import_statement
+            for name_node in stmt.children_by_field_name("name"):
+                if name_node.type == "dotted_name":  # import x.y
+                    dotted = _text(name_node) or ""
+                    if dotted:
+                        modules[dotted] = dotted
+                        modules.setdefault(dotted.split(".")[0], dotted.split(".")[0])
+                elif name_node.type == "aliased_import":  # import x.y as z
+                    original = _text(name_node.child_by_field_name("name"))
+                    alias = _text(name_node.child_by_field_name("alias"))
+                    if original and alias:
+                        modules[alias] = original
+    return _ImportTable(symbols, modules)
+
+
+def _parse_file(parser: Parser, ctx: ExtractContext, module: str) -> Node | None:
+    path = ctx.path_by_module.get(module)
+    if path is None:
+        return None
+    source = (Path(ctx.materialized_root) / path).read_bytes()
+    return parser.parse(source).root_node
+
+
 def _caller_scan_root(parser: Parser, span: ParsedSpan) -> Node | None:
     """The subtree whose calls belong to one caller: a def's BODY (its own decorators, parameters
     and annotations are excluded by construction), or the whole file for a module. Shared with the
-    process-path sink scan so call attribution stays bit-identical across both."""
+    process-path sink scan AND the events call-form scan so call attribution stays bit-identical
+    across all three."""
     root = parser.parse(textwrap.dedent(span.raw_text).encode("utf-8")).root_node
     if span.span_kind == "module":
         return root
