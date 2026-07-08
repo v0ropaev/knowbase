@@ -366,6 +366,46 @@ def package_targets(conn: Connection, sha: str) -> list[PackageTarget]:
     return targets
 
 
+@dataclass(frozen=True)
+class RepoTarget:
+    top_modules: list[str]  # top-level plain modules (no dot in the name, not an __init__)
+    top_packages: list[str]  # top-level packages (no dot in the name)
+    spans: list[ArtifactSpanRow]  # bounded grounding: top modules + top packages' own bounded sets
+
+
+def repo_target(
+    modules: Sequence[ModuleTarget], packages: Sequence[PackageTarget]
+) -> RepoTarget:
+    """The single whole-repo describe target, grounded on the repo's TOP-LEVEL surface.
+
+    The grounding set is every top-level plain module's spans plus, for each top-level package,
+    that package's own already-bounded grounding set (its ``__init__`` + direct children — the
+    ``package_targets`` contract). One deliberate level of descent: a typical src-layout repo has
+    exactly ONE top package with a near-empty ``__init__``, so grounding on top files alone would
+    starve ``validate_claims`` and the overview would never survive. Grandchildren and deeper stay
+    excluded — their own, nearer package overviews cover them. Pure function: the describe pass
+    already holds both target lists, so no extra ``span_occurrence`` scan is paid.
+    """
+    package_names = {p.package for p in packages}
+    top_modules = sorted(
+        mt.module
+        for mt in modules
+        if "." not in mt.module and mt.module not in package_names
+    )
+    top_packages = sorted(p.package for p in packages if "." not in p.package)
+    by_module = {mt.module: mt for mt in modules}
+    by_package = {p.package: p for p in packages}
+    spans_by_id: dict[bytes, ArtifactSpanRow] = {}
+    for name in top_modules:
+        for span in by_module[name].spans:
+            spans_by_id.setdefault(span.span_id, span)
+    for name in top_packages:
+        for span in by_package[name].spans:
+            spans_by_id.setdefault(span.span_id, span)
+    spans = sorted(spans_by_id.values(), key=lambda s: s.fq_symbol_path)
+    return RepoTarget(top_modules=top_modules, top_packages=top_packages, spans=spans)
+
+
 def branch_head(conn: Connection, name: str) -> str | None:
     """The recorded ``branch_ref`` cursor for ``name`` (the watch daemon's resume point)."""
     stmt = select(m.branch_ref.c.head_sha).where(m.branch_ref.c.name == name)

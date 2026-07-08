@@ -19,6 +19,7 @@ from kb.daemon.pipeline import index_commit
 from kb.eval._fixtures import make_git_repo
 from kb.eval.tier1_api_test import FILES
 from kb.extract.deterministic.calls import CallGraphExtractor
+from kb.extract.deterministic.events import EventExtractor
 from kb.extract.deterministic.fastapi_contract import FastAPIExtractor
 from kb.extract.deterministic.paths import ProcessPathExtractor
 from kb.extract.semantic.describe import describe_snapshot
@@ -53,6 +54,30 @@ LP_FILES = {
         "books = Books()\n\n\n"
         "def charge():\n    return books.record_label('label')\n"
     ),
+}
+
+
+# An event-handler fixture (unique "evd" module names + unique content, so the shared session DB
+# can't collide on the sha): a SQLAlchemy listener in ONE file listens to a class defined in
+# ANOTHER file — cross-file grounding, and OrderOut is a token of both spans.
+EVD_FILES = {
+    "src/evd/__init__.py": "",
+    "src/evd/db.py": "class OrderOut:\n    order_id: int\n    total: float\n",
+    "src/evd/hooks.py": (
+        "from sqlalchemy import event\n"
+        "from evd.db import OrderOut\n\n\n"
+        "@event.listens_for(OrderOut, 'after_insert')\n"
+        "def audit_insert(mapper, connection, target):\n    pass\n"
+    ),
+}
+
+# A nested-package fixture (unique "rvw" names): proves the repo overview's grounding is BOUNDED —
+# a grandchild module must never ground it (its own nearer package overview covers it).
+RVW_FILES = {
+    "src/rvw/__init__.py": "",
+    "src/rvw/core.py": "class OrderOut:\n    review_id: int\n",
+    "src/rvw/inner/__init__.py": "",
+    "src/rvw/inner/impl.py": "def deep():\n    return 'grandchild'\n",
 }
 
 
@@ -176,6 +201,70 @@ def test_package_descriptions_are_grounded(engine: Engine, tmp_path: Path) -> No
     with engine.connect() as conn:
         prov_files = {p.file_path for p in provenance_for_artifact(conn, sha, row.logical_key)}
     assert prov_files  # grounded on the package's code spans (>= 1 file)
+
+
+def test_event_handler_descriptions_are_grounded(engine: Engine, tmp_path: Path) -> None:
+    """The same span-validation gate covers LLM descriptions of event handlers (DESIGN.md §9)."""
+    sha = make_git_repo(tmp_path, [EVD_FILES])[0]
+    index_commit(
+        engine, str(tmp_path), sha, extractors=[EventExtractor()], first_party_root="src"
+    )
+    describe_snapshot(engine, sha, _StubProvider())
+
+    rows = [
+        r for r in _description_rows(engine, sha) if r.payload["target_kind"] == "event_handler"
+    ]
+    assert len(rows) == 1  # exactly the one extracted handler gets a description
+    row = rows[0]
+    assert row.logical_key == "desc:event:evd.hooks.audit_insert"
+    assert row.payload["target_logical_key"] == "event:evd.hooks.audit_insert"
+    symbols = [c["symbol"] for c in row.payload["claims"]]
+    assert REAL in symbols  # the grounded claim survives on the event-handler path
+    assert FAKE not in symbols  # adversarial: the fabricated claim is dropped here too
+    assert row.is_deterministic is False  # surfaced as llm_grounded
+    with engine.connect() as conn:
+        prov_files = {p.file_path for p in provenance_for_artifact(conn, sha, row.logical_key)}
+    # cross-file: the handler span AND the listened-to class it resolves to
+    assert prov_files == {"src/evd/hooks.py", "src/evd/db.py"}
+
+
+def test_repo_overview_is_grounded(engine: Engine, tmp_path: Path) -> None:
+    """The same span-validation gate covers the whole-repo overview (DESIGN.md §9)."""
+    sha = _index(engine, tmp_path)
+    describe_snapshot(engine, sha, _StubProvider())
+
+    rows = [r for r in _description_rows(engine, sha) if r.payload["target_kind"] == "repo"]
+    assert len(rows) == 1  # exactly ONE repo overview per snapshot
+    row = rows[0]
+    assert row.logical_key == "desc:repo"
+    assert row.payload["target_logical_key"] == "repo"
+    symbols = [c["symbol"] for c in row.payload["claims"]]
+    assert REAL in symbols  # the grounded claim survives on the repo path
+    assert FAKE not in symbols  # adversarial: the fabricated claim is dropped on the repo path
+    assert row.is_deterministic is False  # surfaced as llm_grounded
+    with engine.connect() as conn:
+        prov_files = {p.file_path for p in provenance_for_artifact(conn, sha, row.logical_key)}
+    # exactly the top package `app` + its direct children — the bounded top-level surface
+    assert prov_files == {
+        "src/app/__init__.py",
+        "src/app/schemas.py",
+        "src/app/routes.py",
+        "src/app/main.py",
+    }
+
+
+def test_repo_overview_grounding_is_bounded(engine: Engine, tmp_path: Path) -> None:
+    """A grandchild module never grounds the repo overview (its own package overview covers it)."""
+    sha = make_git_repo(tmp_path, [RVW_FILES])[0]
+    index_commit(engine, str(tmp_path), sha, extractors=[], first_party_root="src")
+    describe_snapshot(engine, sha, _StubProvider())
+
+    rows = [r for r in _description_rows(engine, sha) if r.payload["target_kind"] == "repo"]
+    assert len(rows) == 1
+    with engine.connect() as conn:
+        prov_files = {p.file_path for p in provenance_for_artifact(conn, sha, "desc:repo")}
+    assert "src/rvw/core.py" in prov_files  # a direct child grounds the overview ...
+    assert "src/rvw/inner/impl.py" not in prov_files  # ... a grandchild never does
 
 
 def test_process_path_descriptions_are_grounded(engine: Engine, tmp_path: Path) -> None:

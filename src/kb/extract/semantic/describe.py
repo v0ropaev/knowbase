@@ -1,15 +1,18 @@
 """LLM-grounded NL descriptions over a snapshot — a separate, key-gated pass (DESIGN.md §4, §9).
 
-For each ``api_route`` / ``entity`` / ``process_path`` artifact, each first-party module (file),
-AND each first-party package, an LLM writes a short summary plus structured claims; each claim is
-validated against the target's own grounding spans (``grounding.validate_claims``), unvalidated
-claims are dropped, and — if anything survives — a ``description`` artifact is stored grounded on
-the SAME spans (role ``describes``, ``is_deterministic=False``). Modules are grounded on ALL of the
-file's spans; a package overview is grounded on its own and its direct-child modules' spans and
-synthesizes richer *context* (import edges + public surface + member-module summaries) while its
-claims stay code-grounded; a process-path label is grounded on every span along the materialized
-path, so its confidence (kept/(kept+dropped)) honestly stays < 1.0. Never on the ``kb index`` path.
-Idempotent per (model, prompt): ``artifact_id`` folds in model_id + prompt.
+For each ``api_route`` / ``entity`` / ``process_path`` / ``event_handler`` artifact, each
+first-party module (file), each first-party package, AND the repo as a whole, an LLM writes a
+short summary plus structured claims; each claim is validated against the target's own grounding
+spans (``grounding.validate_claims``), unvalidated claims are dropped, and — if anything
+survives — a ``description`` artifact is stored grounded on the SAME spans (role ``describes``,
+``is_deterministic=False``). Modules are grounded on ALL of the file's spans; a package overview
+is grounded on its own and its direct-child modules' spans and synthesizes richer *context*
+(import edges + public surface + member-module summaries) while its claims stay code-grounded; a
+process-path label is grounded on every span along the materialized path, so its confidence
+(kept/(kept+dropped)) honestly stays < 1.0; the whole-repo overview is grounded on the bounded
+top-level surface (``queries.repo_target``) and synthesizes the package overviews written just
+before it. Never on the ``kb index`` path. Idempotent per (model, prompt): ``artifact_id`` folds
+in model_id + prompt.
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import Connection, Engine, select
+from sqlalchemy import Connection, Engine, func, select
 
 from kb.extract.base import DerivedEdge, ExtractedArtifact
 from kb.extract.semantic.grounding import validate_claims
@@ -28,8 +31,10 @@ from kb.store import models as m
 from kb.store.queries import (
     ArtifactSpanRow,
     PackageTarget,
+    RepoTarget,
     module_targets,
     package_targets,
+    repo_target,
     spans_for_artifact,
 )
 from kb.store.writer import write_grounded_artifact, write_snapshot_entry
@@ -37,12 +42,15 @@ from kb.store.writer import write_grounded_artifact, write_snapshot_entry
 EXTRACTOR_ID = "llm_describe"
 EXTRACTOR_VERSION = "1"
 PROMPT_VERSION = "1"
-DESCRIBE_KINDS = ("api_route", "entity", "process_path")
+DESCRIBE_KINDS = ("api_route", "entity", "process_path", "event_handler")
 _BODY_CAP = 6000  # prompt source-span body cap (validation still runs over every span)
 _DEFAULT_FACTS_CAP = 800  # facts budget for route/entity prompts (kept byte-identical)
 _PACKAGE_FACTS_CAP = 4000  # larger facts budget for rich package overviews (context only)
 _PROCESS_FACTS_CAP = 4000  # larger facts budget for process payloads (steps/edges/sink context)
+_EVENT_FACTS_CAP = 2000  # event payloads (registrations list) overflow the default 800 budget
+_REPO_FACTS_CAP = 8000  # repo overview facts are dominated by up to 40 package summaries
 _FACT_LIST_CAP = 40  # cap each import/surface fact list (context only; validation runs over spans)
+_FACTS_CAPS = {"process_path": _PROCESS_FACTS_CAP, "event_handler": _EVENT_FACTS_CAP}
 
 _SYSTEM = (
     "You describe a code artifact using ONLY the provided source spans. Respond with STRICT JSON "
@@ -60,7 +68,7 @@ class DescribeResult:
 
 
 def describe_snapshot(engine: Engine, sha: str, provider: LLMProvider) -> DescribeResult:
-    """Grounded descriptions for the snapshot's route/entity/process-path artifacts + modules."""
+    """Grounded descriptions: route/entity/process/event artifacts, modules, packages, the repo."""
     join = m.snapshot_entry.join(
         m.artifact, m.artifact.c.artifact_id == m.snapshot_entry.c.artifact_id
     )
@@ -89,14 +97,13 @@ def describe_snapshot(engine: Engine, sha: str, provider: LLMProvider) -> Descri
                 target_kind=target.kind,
                 facts=target.payload,
                 spans=spans,
-                facts_cap=_PROCESS_FACTS_CAP
-                if target.kind == "process_path"
-                else _DEFAULT_FACTS_CAP,
+                facts_cap=_FACTS_CAPS.get(target.kind, _DEFAULT_FACTS_CAP),
             )
             described += int(stored)
             dropped_total += dropped
 
-        for module in module_targets(conn, sha):
+        modules = module_targets(conn, sha)
+        for module in modules:
             stored, dropped = _describe_one(
                 conn,
                 sha,
@@ -110,9 +117,10 @@ def describe_snapshot(engine: Engine, sha: str, provider: LLMProvider) -> Descri
             described += int(stored)
             dropped_total += dropped
 
-        # Package overviews run LAST so they can synthesize the module descriptions written above
-        # (visible on this same transaction's connection).
-        for package in package_targets(conn, sha):
+        # Package overviews run AFTER modules so they can synthesize the module descriptions
+        # written above (visible on this same transaction's connection).
+        packages = package_targets(conn, sha)
+        for package in packages:
             if not package.spans:
                 continue
             stored, dropped = _describe_one(
@@ -125,6 +133,24 @@ def describe_snapshot(engine: Engine, sha: str, provider: LLMProvider) -> Descri
                 facts=_package_facts(conn, sha, package),
                 spans=package.spans,
                 facts_cap=_PACKAGE_FACTS_CAP,
+            )
+            described += int(stored)
+            dropped_total += dropped
+
+        # The whole-repo overview runs LAST: it synthesizes the package overviews written above,
+        # grounded on the bounded top-level surface (queries.repo_target).
+        repo = repo_target(modules, packages)
+        if repo.spans:
+            stored, dropped = _describe_one(
+                conn,
+                sha,
+                provider,
+                logical_key="desc:repo",
+                target_logical_key="repo",
+                target_kind="repo",
+                facts=_repo_facts(conn, sha, repo),
+                spans=repo.spans,
+                facts_cap=_REPO_FACTS_CAP,
             )
             described += int(stored)
             dropped_total += dropped
@@ -255,6 +281,56 @@ def _package_facts(conn: Connection, sha: str, target: PackageTarget) -> dict[st
         "incoming_imports": sorted(incoming)[:_FACT_LIST_CAP],
         "public_surface": surface[:_FACT_LIST_CAP],
         "member_summaries": member_summaries,
+    }
+
+
+def _repo_facts(conn: Connection, sha: str, target: RepoTarget) -> dict[str, Any]:
+    """Rich *context* for the whole-repo overview: package/top-module summaries (written earlier
+    in this same transaction), package-level import edges, external dependencies, and artifact
+    counts. Context only — claims still validate against the repo's top-level code spans."""
+    first_party_tops = set(target.top_packages) | set(target.top_modules)
+    cross_package: set[str] = set()
+    external: set[str] = set()
+    for row in _snapshot_artifacts(conn, sha, ("import_edge",)):
+        importer, imported = row.payload.get("importer"), row.payload.get("imported")
+        if importer is None or imported is None:
+            continue
+        importer_top = str(importer).split(".", 1)[0]
+        imported_top = str(imported).split(".", 1)[0]
+        if importer_top not in first_party_tops:
+            continue
+        if imported_top in first_party_tops:
+            if imported_top != importer_top:
+                cross_package.add(f"{importer_top}->{imported_top}")
+        else:
+            external.add(imported_top)
+    package_summaries: dict[str, str] = {}
+    top_module_summaries: dict[str, str] = {}
+    for row in _snapshot_artifacts(conn, sha, ("description",)):
+        payload = row.payload
+        key = str(payload.get("target_logical_key"))
+        if payload.get("target_kind") == "package":
+            package_summaries[key] = str(payload.get("summary", ""))
+        elif payload.get("target_kind") == "module" and key in target.top_modules:
+            top_module_summaries[key] = str(payload.get("summary", ""))
+    counts = conn.execute(
+        select(m.artifact.c.kind, func.count())
+        .select_from(
+            m.snapshot_entry.join(
+                m.artifact, m.artifact.c.artifact_id == m.snapshot_entry.c.artifact_id
+            )
+        )
+        .where(m.snapshot_entry.c.sha == sha, m.artifact.c.kind != "description")
+        .group_by(m.artifact.c.kind)
+    ).all()
+    return {
+        "top_packages": target.top_packages,
+        "top_modules": target.top_modules,
+        "package_summaries": dict(sorted(package_summaries.items())[:_FACT_LIST_CAP]),
+        "top_module_summaries": dict(sorted(top_module_summaries.items())[:_FACT_LIST_CAP]),
+        "cross_package_imports": sorted(cross_package)[:_FACT_LIST_CAP],
+        "external_imports": sorted(external)[:_FACT_LIST_CAP],
+        "artifact_counts": {str(kind): int(count) for kind, count in counts},
     }
 
 
