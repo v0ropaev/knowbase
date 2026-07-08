@@ -7,8 +7,8 @@
 > + event-handler + call-graph extractors plus the grounded process-path builder over them — with
 > cross-file grounding, the sandboxed openapi and griffe oracles, the read-only MCP server, pgvector
 > embeddings/search, the RAG A/B gate plus a nightly LLM-judged A/B, LLM-grounded descriptions
-> through per-package overviews and process-path labels, incremental re-index, and published Docker
-> images); items still labelled *deferred* below remain so.
+> through the whole-repo overview and process-path labels, incremental re-index, and published
+> Docker images); items still labelled *deferred* below remain so.
 
 ---
 
@@ -344,12 +344,17 @@ rejected. **Verbalized LLM confidence is never used as the score.**
 > *Implemented:* the `kb describe` describer enforces this floor —
 > `kb.extract.semantic.grounding.validate_claims` drops any claim whose cited symbol is absent from
 > the target's grounding spans; a target with no surviving claim is not stored. It covers
-> `api_route`/`entity` artifacts, **per-module (file) descriptions**, and **per-package architecture
-> overviews** (a package is grounded on its own and its direct-child modules' spans; the overview
-> synthesizes the import graph + public surface + member-module summaries as *context*, but claims
-> still validate against code spans, so provenance stays code-grounded). The gate is deterministic,
-> so `semantic_grounding_test` enforces it in CI (stub LLM, no API key), including an adversarial
-> fabricated claim that must be dropped — on the artifact, module, and package paths.
+> `api_route`/`entity`/`event_handler` artifacts, **per-module (file) descriptions**,
+> **per-package architecture overviews** (a package is grounded on its own and its direct-child
+> modules' spans; the overview synthesizes the import graph + public surface + member-module
+> summaries as *context*, but claims still validate against code spans, so provenance stays
+> code-grounded), and the **whole-repo overview** (one `desc:repo` per snapshot, grounded on the
+> bounded top-level surface — top-level modules plus each top package's own bounded set,
+> `queries.repo_target`; it synthesizes the package overviews written just before it in the same
+> pass). The gate is deterministic, so `semantic_grounding_test` enforces it in CI (stub LLM, no
+> API key), including an adversarial fabricated claim that must be dropped — on the artifact,
+> module, package, event-handler, and repo paths — and a bounded-grounding proof (a grandchild
+> module never grounds the repo overview).
 >
 > *Implemented (deterministic process slice):* `process_path` artifacts satisfy the floor **by
 > construction** — every sink claim IS a registry match on the materialized path and every endpoint
@@ -408,7 +413,7 @@ freshness(current|stale@sha)`, with a deterministic tie-break for reproducible e
 | `kb.eval` | Tiered eval; deterministic tiers gate CI. | pytest over SHA-pinned golden repos |
 | `kb.mcp` | Read-only MCP server; provenance-carrying records; budget-aware assembly. | FastMCP (pinned), Pydantic models |
 | `kb.daemon` | Orchestration + CLI: index a repo @ SHA (full or incremental), run extractors in order, write snapshot, host MCP; `kb watch` polls a local branch ref and indexes new first-parent commits incrementally (`branch_ref` cursor, per-commit crash-safe advance). | typer |
-| `kb.extract.semantic` | **Shipped:** `kb describe` — LLM-grounded NL descriptions of routes/entities/modules, **per-package architecture overviews** (a package grounded on its own + direct-child modules' spans; the overview synthesizes the import graph + public surface + member-module summaries as context, claims code-grounded), **and process-path labels** (one per materialized `process_path`, grounded on every span along the path, confidence < 1.0), each claim validated against the target's spans by a deterministic sub-property gate (`grounding.validate_claims`); separate key-gated pass, never on `index`. **`kb mine`** — ADR-candidate mining over local first-parent history: one `decision` per mined commit, grounded on the commit's changed spans (role `changed`), message verbatim in the payload, same claim floor. *Deferred:* whole-repo overview, PR-description mining. | thin LLM adapter (`kb.llm`); `PathEngine` + YAML sink registry live in `kb.extract.deterministic.paths` |
+| `kb.extract.semantic` | **Shipped:** `kb describe` — LLM-grounded NL descriptions of routes/entities/modules, **per-package architecture overviews** (a package grounded on its own + direct-child modules' spans; the overview synthesizes the import graph + public surface + member-module summaries as context, claims code-grounded), **process-path labels** (one per materialized `process_path`, grounded on every span along the path, confidence < 1.0), **event-handler descriptions**, **and the whole-repo overview** (one `desc:repo` per snapshot, grounded on the bounded top-level surface via `queries.repo_target`, synthesizing package summaries + cross-package imports + artifact counts as context), each claim validated against the target's spans by a deterministic sub-property gate (`grounding.validate_claims`); separate key-gated pass, never on `index`. **`kb mine`** — ADR-candidate mining over local first-parent history: one `decision` per mined commit, grounded on the commit's changed spans (role `changed`), message verbatim in the payload, same claim floor. *Deferred:* PR-description mining. | thin LLM adapter (`kb.llm`); `PathEngine` + YAML sink registry live in `kb.extract.deterministic.paths` |
 
 ---
 

@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Describe slices 5 & 6** (`kb describe`): **event-handler descriptions** (`DESCRIBE_KINDS`
+  gained `event_handler`; grounding = the handler span plus its owner/listened-to classes,
+  cross-file; a dedicated `_EVENT_FACTS_CAP` because registration payloads overflow the default
+  facts budget) and the **whole-repo overview** — one `desc:repo` description per snapshot
+  (`target_kind="repo"`), grounded on the **bounded top-level surface** (top-level plain modules
+  plus each top-level package's own bounded grounding set — its `__init__` + direct children, the
+  `package_targets` precedent; grandchildren are covered by their own nearer package overviews).
+  It runs last in the describe pass and synthesizes the just-written package overviews,
+  cross-package import edges, external dependencies, and artifact counts as *context*
+  (`_repo_facts`, `_REPO_FACTS_CAP`), while claims still validate against the top-level code
+  spans. New pure `store.queries.repo_target`. Route/entity/module/package/process prompts stay
+  **byte-identical** (no `PROMPT_VERSION` bump). The `semantic_grounding_test` gate gains three
+  tests (event-handler cross-file provenance; exactly one repo overview grounded on exactly the
+  top surface; a grandchild module provably never grounds the repo overview); headline HARD gates
+  stay **fifteen**.
 - **ADR-candidate mining from git history — slice 1** (`kb mine`,
   `kb.extract.semantic.mine`): a new key-gated LLM pass (separate from `kb index`, mirror of
   `kb describe`) that walks the local first-parent history from the latest indexed commit
