@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 from sqlalchemy import Engine, select
 
 from kb.daemon.pipeline import index_commit
@@ -22,10 +23,10 @@ from kb.extract.deterministic.calls import CallGraphExtractor
 from kb.extract.deterministic.events import EventExtractor
 from kb.extract.deterministic.fastapi_contract import FastAPIExtractor
 from kb.extract.deterministic.paths import ProcessPathExtractor
-from kb.extract.semantic.describe import describe_snapshot
+from kb.extract.semantic.describe import _build_prompt, describe_snapshot
 from kb.extract.semantic.grounding import validate_claims
 from kb.store import models as m
-from kb.store.queries import provenance_for_artifact
+from kb.store.queries import ArtifactSpanRow, provenance_for_artifact
 
 REAL = "OrderOut"  # appears in the fixture (schemas.py + the routes' response_model)
 FAKE = "nonexistent_symbol_xyz"  # appears nowhere -> must be dropped as a hallucination
@@ -82,11 +83,19 @@ RVW_FILES = {
 
 
 class _StubProvider:
-    """Deterministic stand-in for an LLMProvider: always returns one real + one fabricated claim."""
+    """Deterministic stand-in for an LLMProvider: always returns one real + one fabricated claim.
+
+    Records every ``system`` prompt it sees, so tests can assert the repo overview runs under its
+    own system prompt without importing private constants.
+    """
 
     model_id = "stub:describe-test"
 
+    def __init__(self) -> None:
+        self.systems: list[str] = []
+
     def complete(self, system: str, user: str, *, max_tokens: int = 1024) -> str:
+        self.systems.append(system)
         return json.dumps(
             {
                 "summary": "Stub description.",
@@ -125,6 +134,8 @@ def _description_rows(engine: Engine, sha: str) -> list[Any]:
                 m.artifact.c.logical_key,
                 m.artifact.c.payload,
                 m.artifact.c.is_deterministic,
+                m.artifact.c.confidence,
+                m.artifact.c.prompt_version,
             )
             .select_from(join)
             .where(m.snapshot_entry.c.sha == sha, m.artifact.c.kind == "description")
@@ -146,6 +157,8 @@ def test_describe_stores_only_grounded_claims(engine: Engine, tmp_path: Path) ->
             assert REAL in symbols  # the grounded claim survives
             assert FAKE not in symbols  # adversarial: the hallucinated claim is never stored
             assert row.is_deterministic is False  # surfaced as llm_grounded
+            assert row.confidence == pytest.approx(1 / 3)  # Laplace: 1 / (1 + 1 + 1)
+            assert row.confidence < 1.0  # 1.0 stays reserved for the deterministic layer
             prov_files = {p.file_path for p in provenance_for_artifact(conn, sha, row.logical_key)}
             assert prov_files  # grounded on its target's spans (>= 1 file)
 
@@ -171,6 +184,7 @@ def test_module_descriptions_are_grounded(engine: Engine, tmp_path: Path) -> Non
         symbols = [c["symbol"] for c in row.payload["claims"]]
         assert REAL in symbols
         assert FAKE not in symbols
+        assert row.prompt_version == "1"  # non-repo prompts are contract: byte-identical
 
     # Modules with no occurrence of OrderOut (e.g. app.main, app.__init__) get NO description:
     # every claim was a hallucination relative to the file's spans, so nothing is stored.
@@ -194,6 +208,7 @@ def test_package_descriptions_are_grounded(engine: Engine, tmp_path: Path) -> No
     assert "app" in packages
     row = packages["app"]
     assert row.logical_key == "desc:package:app"
+    assert row.prompt_version == "1"  # non-repo prompts are contract: byte-identical
     symbols = [c["symbol"] for c in row.payload["claims"]]
     assert REAL in symbols  # the grounded claim survives on the package path
     assert FAKE not in symbols  # adversarial: the fabricated claim is dropped on the package path
@@ -231,13 +246,20 @@ def test_event_handler_descriptions_are_grounded(engine: Engine, tmp_path: Path)
 def test_repo_overview_is_grounded(engine: Engine, tmp_path: Path) -> None:
     """The same span-validation gate covers the whole-repo overview (DESIGN.md §9)."""
     sha = _index(engine, tmp_path)
-    describe_snapshot(engine, sha, _StubProvider())
+    stub = _StubProvider()
+    describe_snapshot(engine, sha, stub)
+
+    # the repo call runs LAST and under its OWN system prompt (facts synthesis); every other
+    # target this run shares the one generic system prompt
+    assert stub.systems[-1] != stub.systems[0]
+    assert len(set(stub.systems[:-1])) == 1
 
     rows = [r for r in _description_rows(engine, sha) if r.payload["target_kind"] == "repo"]
     assert len(rows) == 1  # exactly ONE repo overview per snapshot
     row = rows[0]
     assert row.logical_key == "desc:repo"
     assert row.payload["target_logical_key"] == "repo"
+    assert row.prompt_version == "2"  # the repo prompt carries its own identity-bearing version
     symbols = [c["symbol"] for c in row.payload["claims"]]
     assert REAL in symbols  # the grounded claim survives on the repo path
     assert FAKE not in symbols  # adversarial: the fabricated claim is dropped on the repo path
@@ -251,6 +273,21 @@ def test_repo_overview_is_grounded(engine: Engine, tmp_path: Path) -> None:
         "src/app/routes.py",
         "src/app/main.py",
     }
+
+
+def test_repo_prompt_body_packing_is_fair() -> None:
+    """With ``span_cap`` no single large file monopolizes the prompt body (the dogfooding fix);
+    without it the historical greedy packing stays byte-identical for every other kind."""
+    huge = ArtifactSpanRow(b"a", "pkg.big", "x" * 7000)
+    small = ArtifactSpanRow(b"b", "pkg.small", "class OrderOut: ...")
+
+    greedy = _build_prompt("repo", {}, [huge, small])
+    assert "pkg.big" in greedy
+    assert "pkg.small" not in greedy  # guard: the pre-fix greedy behavior, kept for other kinds
+
+    fair = _build_prompt("repo", {}, [huge, small], span_cap=400)
+    assert "pkg.big" in fair
+    assert "pkg.small" in fair  # guard: the fix — both spans get a fair slice
 
 
 def test_repo_overview_grounding_is_bounded(engine: Engine, tmp_path: Path) -> None:

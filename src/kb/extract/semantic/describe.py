@@ -8,11 +8,12 @@ survives — a ``description`` artifact is stored grounded on the SAME spans (ro
 ``is_deterministic=False``). Modules are grounded on ALL of the file's spans; a package overview
 is grounded on its own and its direct-child modules' spans and synthesizes richer *context*
 (import edges + public surface + member-module summaries) while its claims stay code-grounded; a
-process-path label is grounded on every span along the materialized path, so its confidence
-(kept/(kept+dropped)) honestly stays < 1.0; the whole-repo overview is grounded on the bounded
-top-level surface (``queries.repo_target``) and synthesizes the package overviews written just
-before it. Never on the ``kb index`` path. Idempotent per (model, prompt): ``artifact_id`` folds
-in model_id + prompt.
+process-path label is grounded on every span along the materialized path; the whole-repo overview
+is grounded on the bounded top-level surface (``queries.repo_target``) and — under its own system
+prompt — synthesizes the package overviews written just before it. Confidence is Laplace add-one,
+``kept / (kept + dropped + 1)``: the +1 prices unknown-unknowns, so an llm_grounded artifact stays
+< 1.0 by construction (1.0 remains reserved for the deterministic layer). Never on the
+``kb index`` path. Idempotent per (model, prompt): ``artifact_id`` folds in model_id + prompt.
 """
 
 from __future__ import annotations
@@ -40,8 +41,9 @@ from kb.store.queries import (
 from kb.store.writer import write_grounded_artifact, write_snapshot_entry
 
 EXTRACTOR_ID = "llm_describe"
-EXTRACTOR_VERSION = "1"
-PROMPT_VERSION = "1"
+EXTRACTOR_VERSION = "2"  # v2: Laplace add-one confidence (kept/(kept+dropped+1))
+PROMPT_VERSION = "1"  # unchanged kinds keep their exact prompts; the repo path carries its own
+_REPO_PROMPT_VERSION = "2"  # v2: repo overview synthesizes facts (see _REPO_SYSTEM)
 DESCRIBE_KINDS = ("api_route", "entity", "process_path", "event_handler")
 _BODY_CAP = 6000  # prompt source-span body cap (validation still runs over every span)
 _DEFAULT_FACTS_CAP = 800  # facts budget for route/entity prompts (kept byte-identical)
@@ -49,6 +51,9 @@ _PACKAGE_FACTS_CAP = 4000  # larger facts budget for rich package overviews (con
 _PROCESS_FACTS_CAP = 4000  # larger facts budget for process payloads (steps/edges/sink context)
 _EVENT_FACTS_CAP = 2000  # event payloads (registrations list) overflow the default 800 budget
 _REPO_FACTS_CAP = 8000  # repo overview facts are dominated by up to 40 package summaries
+_REPO_SPAN_CAP = 400  # per-span body slice for the repo prompt: no single top file may
+# monopolize _BODY_CAP (a src-layout repo's top surface is mostly empty __init__ files plus a
+# few large direct children — dogfooding showed one of them eating the whole budget)
 _FACT_LIST_CAP = 40  # cap each import/surface fact list (context only; validation runs over spans)
 _FACTS_CAPS = {"process_path": _PROCESS_FACTS_CAP, "event_handler": _EVENT_FACTS_CAP}
 
@@ -58,6 +63,24 @@ _SYSTEM = (
     '"<one identifier that appears verbatim in the code>"}]}. Every claim must cite a real '
     "identifier from the code (a function, class, field, or parameter name); never invent names."
 )
+
+# The repo overview is the one target whose substance lives in the FACTS (the package/module
+# summaries written just before it), not in its grounding spans (the mostly-empty top-level
+# surface) — so its system prompt demands synthesis while claims still validate against spans.
+# Module/package names ARE valid symbols: the validator accepts any component of a grounding
+# span's fully-qualified path, and the top-level surface spans carry exactly those names.
+_REPO_SYSTEM = (
+    "You write a whole-repository architecture overview. Synthesize the provided facts - the "
+    "package and module summaries, import edges, external dependencies, and artifact counts - "
+    "into a bird's-eye view of what the repository does and how its parts fit together; the "
+    "source spans are the repo's top-level surface, not its substance. Respond with STRICT "
+    'JSON and nothing else: {"summary": "<= 2 sentences", "claims": [{"text": "...", '
+    '"symbol": "<one identifier>"}]} with AT MOST 8 claims. Each claim\'s symbol must appear '
+    "verbatim in the source spans OR be one of the module/package names listed in the facts "
+    "(e.g. a top_packages / package_summaries key, or its last dotted segment); never invent "
+    "names."
+)
+_REPO_MAX_TOKENS = 1000  # the synthesized overview + up to 8 claims overflow the default 600
 
 
 @dataclass(frozen=True)
@@ -151,6 +174,10 @@ def describe_snapshot(engine: Engine, sha: str, provider: LLMProvider) -> Descri
                 facts=_repo_facts(conn, sha, repo),
                 spans=repo.spans,
                 facts_cap=_REPO_FACTS_CAP,
+                system=_REPO_SYSTEM,
+                prompt_version=_REPO_PROMPT_VERSION,
+                span_cap=_REPO_SPAN_CAP,
+                max_tokens=_REPO_MAX_TOKENS,
             )
             described += int(stored)
             dropped_total += dropped
@@ -168,15 +195,20 @@ def _describe_one(
     facts: dict[str, Any],
     spans: list[ArtifactSpanRow],
     facts_cap: int = _DEFAULT_FACTS_CAP,
+    system: str = _SYSTEM,
+    prompt_version: str = PROMPT_VERSION,
+    span_cap: int | None = None,
+    max_tokens: int = 600,
 ) -> tuple[bool, int]:
-    """Describe one target (artifact / module / package) from its grounding spans.
+    """Describe one target (artifact / module / package / repo) from its grounding spans.
 
     Returns ``(stored, dropped_count)``. A ``description`` artifact is stored (grounded on the
     spans, role ``describes``) only if >= 1 claim survives span-validation; otherwise nothing is
-    stored (anti-hallucination). Idempotent per (model, prompt).
+    stored (anti-hallucination). Idempotent per (model, prompt); the defaults keep every non-repo
+    prompt byte-identical.
     """
-    prompt = _build_prompt(target_kind, facts, spans, facts_cap=facts_cap)
-    data = _parse_json(provider.complete(_SYSTEM, prompt, max_tokens=600))
+    prompt = _build_prompt(target_kind, facts, spans, facts_cap=facts_cap, span_cap=span_cap)
+    data = _parse_json(provider.complete(system, prompt, max_tokens=max_tokens))
     if data is None:
         return False, 0
     raw_claims = [c for c in data.get("claims", []) if isinstance(c, dict)]
@@ -198,10 +230,11 @@ def _describe_one(
         derived_from=[DerivedEdge(s.span_id, "describes") for s in spans],
         extractor_id=EXTRACTOR_ID,
         extractor_version=EXTRACTOR_VERSION,
-        prompt_version=PROMPT_VERSION,
+        prompt_version=prompt_version,
         model_id=provider.model_id,
         is_deterministic=False,
-        confidence=len(kept) / (len(kept) + len(dropped)),
+        # Laplace add-one: the +1 prices unknown-unknowns, so llm_grounded never reaches 1.0
+        confidence=len(kept) / (len(kept) + len(dropped) + 1),
     )
     artifact_id = write_grounded_artifact(conn, artifact)
     write_snapshot_entry(conn, sha, artifact.logical_key, artifact_id)
@@ -214,12 +247,20 @@ def _build_prompt(
     spans: list[ArtifactSpanRow],
     *,
     facts_cap: int = _DEFAULT_FACTS_CAP,
+    span_cap: int | None = None,
 ) -> str:
+    """Pack facts + span bodies under the budget caps.
+
+    ``span_cap`` slices each span's body so no single large file can monopolize ``_BODY_CAP``
+    (the repo overview needs a fair sample of the top-level surface); ``None`` keeps the
+    historical greedy packing byte-identical for every other kind.
+    """
     facts_json = json.dumps(facts, default=str)[:facts_cap]
     parts: list[str] = []
     used = 0
     for s in spans:
-        block = f"# {s.fq_symbol_path}\n{s.raw_text}"
+        text = s.raw_text if span_cap is None else s.raw_text[:span_cap]
+        block = f"# {s.fq_symbol_path}\n{text}"
         if parts and used + len(block) > _BODY_CAP:
             break
         parts.append(block)

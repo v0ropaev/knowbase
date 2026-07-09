@@ -32,8 +32,8 @@ from kb.store.queries import ChangedSpanRow, changed_span_rows, is_sha_indexed
 from kb.store.writer import write_grounded_artifact, write_snapshot_entry
 
 EXTRACTOR_ID = "llm_mine"
-EXTRACTOR_VERSION = "1"
-PROMPT_VERSION = "1"
+EXTRACTOR_VERSION = "2"  # v2: Laplace add-one confidence (kept/(kept+dropped+1))
+PROMPT_VERSION = "2"  # v2: claim text must be a factual sentence, never just the identifier
 _BODY_CAP = 6000  # prompt changed-span body cap (validation still runs over the grounding set)
 _MESSAGE_CAP = 2000  # verbatim commit-message cap (prompt + payload)
 _MAX_GROUNDING_SPANS = 40  # grounding-set cap for huge commits (retro-flagged, never silent)
@@ -43,9 +43,10 @@ _SYSTEM = (
     "You extract the technical or architectural DECISION a git commit records, using ONLY the "
     "commit message and the changed source spans provided. Respond with STRICT JSON and nothing "
     'else: {"summary": "<= 2 sentences: the decision and its why", "claims": [{"text": "...", '
-    '"symbol": "<one identifier that appears verbatim in the changed code>"}]}. Every claim must '
-    "cite a real identifier from the changed code; never invent names. If the commit records no "
-    'decision, return {"summary": "", "claims": []}.'
+    '"symbol": "<one identifier that appears verbatim in the changed code>"}]}. Each claim\'s '
+    '"text" must be one factual sentence stating what was decided or changed - never just the '
+    "identifier itself. Every claim must cite a real identifier from the changed code; never "
+    'invent names. If the commit records no decision, return {"summary": "", "claims": []}.'
 )
 
 
@@ -188,7 +189,8 @@ def _mine_one(
         prompt_version=PROMPT_VERSION,
         model_id=provider.model_id,
         is_deterministic=False,
-        confidence=len(kept) / (len(kept) + len(dropped)),
+        # Laplace add-one: the +1 prices unknown-unknowns, so llm_grounded never reaches 1.0
+        confidence=len(kept) / (len(kept) + len(dropped) + 1),
     )
     artifact_id = write_grounded_artifact(conn, artifact)
     write_snapshot_entry(conn, sha, artifact.logical_key, artifact_id)

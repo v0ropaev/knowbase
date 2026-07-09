@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Whole-repo overview degenerating into a single-file description** (found by a real-LLM
+  dogfooding run): the repo target's grounding spans are a src-layout repo's mostly-empty
+  top-level surface, so the one large direct-child file ate the whole prompt-body budget and the
+  generic system prompt ("describe using ONLY the source spans") made the model ignore the rich
+  facts. The repo path now runs under its **own system prompt** that demands synthesis of the
+  just-written package/module summaries, import edges, and artifact counts, with a **per-span
+  body cap** (`_REPO_SPAN_CAP`) so the top surface is sampled fairly; claims still validate
+  against the grounding spans (`validate_claims` untouched). Every other describe prompt stays
+  **byte-identical** (a packing test guards both behaviors); the repo description carries its own
+  identity-bearing `prompt_version="2"`.
+- **`kb mine` claim texts duplicating the cited symbol**: the mining prompt now demands each
+  claim's `text` be one factual sentence about the decision, never just the identifier
+  (mine `PROMPT_VERSION` 1 → 2 — identity-bearing; re-mining stored decisions needs `--force`
+  and re-bills, documented).
+- **Stale `kb.__version__`** (stuck at "0.1.0" since the first release — found BY the tool: the
+  LLM repo overview quoted it): now resolved dynamically via `importlib.metadata`, eliminating
+  the drift class entirely.
+
+### Changed
+
+- **Confidence for llm_grounded artifacts is now Laplace add-one**: `kept / (kept + dropped + 1)`
+  in both `kb describe` and `kb mine`. Dogfooding showed the plain ratio degenerating to 1.0 on
+  all 147 real artifacts (a disciplined model fabricates nothing), making llm_grounded knowledge
+  indistinguishable by score from the deterministic layer; the +1 prices unknown-unknowns, so
+  1.0 is again reserved for deterministic extraction. `llm_describe`/`llm_mine`
+  `extractor_version` 1 → 2 — REQUIRED: confidence is not part of `artifact_id` and writes are
+  `ON CONFLICT DO NOTHING`, so without the bump the new formula would never reach the store for
+  existing targets. All description/decision ids recompute on the next key-gated run (describe
+  already pays per run and re-points the snapshot; superseded rows are orphaned — GC deferred).
+
 ### Added
 
 - **Events v2 — call-form registrations** (`kb.extract.deterministic.events`): the extractor now

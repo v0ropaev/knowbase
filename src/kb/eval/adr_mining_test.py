@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import pygit2
+import pytest
 from sqlalchemy import Engine, select
 
 from kb.daemon.pipeline import index_commit
@@ -104,6 +105,7 @@ def _decision_rows(engine: Engine, shas: list[str]) -> dict[str, Any]:
                 m.artifact.c.payload,
                 m.artifact.c.is_deterministic,
                 m.artifact.c.confidence,
+                m.artifact.c.prompt_version,
                 m.snapshot_entry.c.artifact_id,
             )
             .select_from(join)
@@ -127,7 +129,9 @@ def test_mine_stores_grounded_decisions(engine: Engine, tmp_path: Path) -> None:
     assert REAL in symbols  # the grounded claim survives
     assert FAKE not in symbols  # adversarial: the fabricated claim is never stored
     assert row.is_deterministic is False
-    assert row.confidence == 0.5  # counted: 1 kept / (1 kept + 1 dropped)
+    assert row.confidence == pytest.approx(1 / 3)  # Laplace: 1 kept / (1 kept + 1 dropped + 1)
+    assert row.confidence < 1.0  # llm_grounded never reaches the deterministic layer's 1.0
+    assert row.prompt_version == "2"  # deliberate friction: catches an un-bumped prompt change
     assert row.payload["message"] == MESSAGES[1]  # verbatim, pinned by the sha in the key
     assert row.payload["sha"] == shas[1]
     assert row.payload["limitations"] == []
