@@ -355,8 +355,10 @@ rejected. **Verbalized LLM confidence is never used as the score.**
 > summaries as *context*, but claims still validate against code spans, so provenance stays
 > code-grounded), and the **whole-repo overview** (one `desc:repo` per snapshot, grounded on the
 > bounded top-level surface — top-level modules plus each top package's own bounded set,
-> `queries.repo_target`; it synthesizes the package overviews written just before it in the same
-> pass). The gate is deterministic, so `semantic_grounding_test` enforces it in CI (stub LLM, no
+> `queries.repo_target`; it runs under its OWN system prompt that demands synthesis of the
+> just-written package/module summaries — the repo's substance lives in those facts, not in its
+> mostly-empty top-level spans — with a per-span body cap so no single large top file can
+> monopolize the prompt, while claims still validate against the grounding spans). The gate is deterministic, so `semantic_grounding_test` enforces it in CI (stub LLM, no
 > API key), including an adversarial fabricated claim that must be dropped — on the artifact,
 > module, package, event-handler, and repo paths — and a bounded-grounding proof (a grandchild
 > module never grounds the repo overview).
@@ -371,14 +373,17 @@ rejected. **Verbalized LLM confidence is never used as the score.**
 > *Implemented (LLM labeling):* `kb describe` now labels each `process_path` as a fourth describe
 > slice — the label's claims validate against the path's own spans (fabricated claims dropped; a
 > path with no surviving claim stores nothing), and the stored description ships with
-> `confidence = kept / (kept + dropped)` < 1.0, as promised above. Gated in
+> `confidence = kept / (kept + dropped + 1)` — Laplace add-one: the +1 prices unknown-unknowns,
+> so an llm_grounded artifact stays < 1.0 **by construction** even when a disciplined model
+> fabricates nothing (dogfooding showed the plain ratio degenerating to 1.0 across the board);
+> 1.0 remains reserved for the deterministic layer. Gated in
 > `semantic_grounding_test` on the stub LLM (no API key), adversarial fabricated claim included.
 >
 > *Implemented (ADR mining, slice 1):* `kb mine` reuses the same floor for history-born knowledge —
 > a `decision` artifact's claims validate against the spans its source commit changed (§4's D5
 > bridge), so a fabricated symbol dies deterministically and a commit whose changed code carries no
-> cited identifier stores nothing. `confidence = kept / (kept + dropped)`, counted, never
-> verbalized; trust stays LOW (§4). Merge commits are skipped (their prose belongs to the PR
+> cited identifier stores nothing. `confidence = kept / (kept + dropped + 1)` (Laplace add-one,
+> as above), counted, never verbalized; trust stays LOW (§4). Merge commits are skipped (their prose belongs to the PR
 > slice), docs-only commits never pay an LLM call, a root commit is mined against the empty tree,
 > and an oversized grounding set is capped with a retro-flag (`grounding_capped` +
 > `total_changed_spans`) — bounded, never silent. Re-mining skips stored decisions (LLM-cost
