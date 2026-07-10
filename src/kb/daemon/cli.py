@@ -184,8 +184,19 @@ def mine(
     force: bool = typer.Option(
         False, "--force", help="Re-mine commits that already carry a decision artifact."
     ),
+    prs: bool = typer.Option(
+        False,
+        "--prs",
+        help="Enrich decisions with GitHub PR titles/bodies (network, opt-in; GITHUB_TOKEN "
+        "optional — anonymous works for public repos at 60 req/h).",
+    ),
+    repo_slug: str | None = typer.Option(
+        None, "--repo-slug", help="GitHub owner/name for --prs (default: parsed from origin)."
+    ),
 ) -> None:
     """Mine ADR candidates from local git history (separate key-gated pass; never on `index`)."""
+    import os
+
     from kb.extract.semantic.mine import mine_history  # lazy: keeps the LLM off other cmds
     from kb.llm.providers import default_llm_provider, has_llm_key
     from kb.store.queries import latest_ingested_sha
@@ -193,6 +204,17 @@ def mine(
     if not has_llm_key():
         typer.echo("no LLM API key (set ANTHROPIC_API_KEY or OPENAI_API_KEY)")
         raise typer.Exit(code=1)
+    pr_provider = None
+    if prs:
+        from kb.git.forge import GitHubPRProvider, origin_slug
+        from kb.git.repo import open_repo
+
+        slug = repo_slug or origin_slug(open_repo(repo))
+        if slug is None:  # fail fast BEFORE spending LLM money: operator config error
+            typer.echo("cannot resolve GitHub owner/name from origin; pass --repo-slug")
+            raise typer.Exit(code=1)
+        token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+        pr_provider = GitHubPRProvider(slug, token=token)
     engine = make_engine(db_url)
     try:
         with engine.connect() as conn:
@@ -202,13 +224,25 @@ def mine(
             raise typer.Exit(code=1)
         provider = default_llm_provider()
         result = mine_history(
-            engine, repo, provider, start_sha=target, max_commits=max_commits, force=force
+            engine,
+            repo,
+            provider,
+            start_sha=target,
+            max_commits=max_commits,
+            force=force,
+            pr_provider=pr_provider,
+        )
+        pr_note = (
+            f"; enriched {result.pr_enriched} with PR text "
+            f"({result.pr_fetch_failed} PR fetches failed)"
+            if prs
+            else ""
         )
         typer.echo(
             f"mined {result.mined} decisions from {result.scanned} commits "
             f"(dropped {result.dropped_claims} claims; skipped {result.skipped_merges} merges, "
-            f"{result.skipped_unindexed} unindexed, {result.skipped_already_mined} already mined) "
-            f"@ {target[:12]} with {provider.model_id}"
+            f"{result.skipped_unindexed} unindexed, {result.skipped_already_mined} already mined"
+            f"{pr_note}) @ {target[:12]} with {provider.model_id}"
         )
     finally:
         engine.dispose()

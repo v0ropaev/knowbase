@@ -89,7 +89,13 @@ Two reframings carried from review:
 - **ADRs are not extractable from code.** Code shows "we use Kafka now", not "we switched
   because RabbitMQ couldn't handle load". ADR candidates are mined from git history + commit
   messages + PR descriptions. Separate pipeline — **local commit history shipped (slice 1,
-  `kb mine`); PR-description mining deferred** (needs a network adapter; `kb.git` stays local).
+  `kb mine`); PR-description mining shipped (slice 2, `kb mine --prs` — strictly opt-in: the
+  only networked step in the toolchain, off the index/serve paths and OFF by default;
+  `kb.git.forge` fetches a squash-merged commit's PR title/body from api.github.com). PR text is
+  context for the LLM and a payload fact — never grounding; and because PR text is MUTABLE after
+  merge, a digest of the capped text is folded into `framework_versions` (identity-bearing, the
+  sink-registry precedent) so an edited PR yields a NEW artifact id instead of a silent payload
+  swap. A failed fetch degrades to the byte-identical plain artifact, counted per run.**
   The D5 grounding bridge: a `decision` artifact is grounded on the spans its source commit
   **changed** (present at the commit, absent at its first parent — the commit's diff is the
   decision's footprint in code), so even prose-born knowledge points at exact code spans. The
@@ -290,7 +296,7 @@ test.)
 EMBED stage; tsvector/`pg_search`/BM25/RRF; snapshot Merkle-root; the runtime `app.openapi()`
 sandbox oracle (eval-only, later milestone — it executes user code); the grounded
 business-process/LLM layer (call-graph slicing, sink registry, labeler, validator); ADR mining
-(slice 1 since shipped — `kb mine`; PR mining still deferred);
+(both slices since shipped — `kb mine` / `kb mine --prs`);
 multi-branch dedup, mutable branch pointers exercise; eval Tiers 2/3 (build when the artifacts
 they score exist; stub the Tier-3 question schema now); GC; SCIP/scip-python upgrade.
 
@@ -418,12 +424,12 @@ freshness(current|stale@sha)`, with a deterministic tie-break for reproducible e
 | `kb.introspect` | Eval-only runtime oracle: runs a FastAPI app in a network-blocked sandbox and emits `app.openapi()` for the Tier-1 API gate. Never on the index path. | subprocess sandbox, fastapi |
 | `kb.embed` | Replaceable embedding adapters + snapshot population for `search_knowledge`. Torch isolated behind the `embed` extra and a lazy import. | sentence-transformers (default), OpenAI (optional), pgvector |
 | `kb.rag` | Frozen pgvector RAG-over-source baseline — the "other arm" of the knowledge-vs-RAG A/B (no provenance/grounding). | deterministic line-window chunker, pgvector |
-| `kb.git` | Ingest commits/branches; diff SHAs → changed byte ranges → changed span_ids. (PR mining deferred.) | pygit2 |
+| `kb.git` | Ingest commits/branches; diff SHAs → changed byte ranges → changed span_ids. `kb.git.forge`: GitHub PR-text adapter (stdlib urllib; feeds opt-in `kb mine --prs` — the only networked module; fail-soft). | pygit2 |
 | `kb.store` | Single source of truth: content-addressed spans/artifacts, provenance edges, snapshot manifests. Enforces the ≥1-derived_from invariant at write. | PostgreSQL 17, psycopg 3, SQLAlchemy Core, alembic |
 | `kb.eval` | Tiered eval; deterministic tiers gate CI. | pytest over SHA-pinned golden repos |
 | `kb.mcp` | Read-only MCP server; provenance-carrying records; budget-aware assembly. | FastMCP (pinned), Pydantic models |
 | `kb.daemon` | Orchestration + CLI: index a repo @ SHA (full or incremental), run extractors in order, write snapshot, host MCP; `kb watch` polls a local branch ref and indexes new first-parent commits incrementally (`branch_ref` cursor, per-commit crash-safe advance). | typer |
-| `kb.extract.semantic` | **Shipped:** `kb describe` — LLM-grounded NL descriptions of routes/entities/modules, **per-package architecture overviews** (a package grounded on its own + direct-child modules' spans; the overview synthesizes the import graph + public surface + member-module summaries as context, claims code-grounded), **process-path labels** (one per materialized `process_path`, grounded on every span along the path, confidence < 1.0), **event-handler descriptions**, **and the whole-repo overview** (one `desc:repo` per snapshot, grounded on the bounded top-level surface via `queries.repo_target`, synthesizing package summaries + cross-package imports + artifact counts as context), each claim validated against the target's spans by a deterministic sub-property gate (`grounding.validate_claims`); separate key-gated pass, never on `index`. **`kb mine`** — ADR-candidate mining over local first-parent history: one `decision` per mined commit, grounded on the commit's changed spans (role `changed`), message verbatim in the payload, same claim floor. *Deferred:* PR-description mining. | thin LLM adapter (`kb.llm`); `PathEngine` + YAML sink registry live in `kb.extract.deterministic.paths` |
+| `kb.extract.semantic` | **Shipped:** `kb describe` — LLM-grounded NL descriptions of routes/entities/modules, **per-package architecture overviews** (a package grounded on its own + direct-child modules' spans; the overview synthesizes the import graph + public surface + member-module summaries as context, claims code-grounded), **process-path labels** (one per materialized `process_path`, grounded on every span along the path, confidence < 1.0), **event-handler descriptions**, **and the whole-repo overview** (one `desc:repo` per snapshot, grounded on the bounded top-level surface via `queries.repo_target`, synthesizing package summaries + cross-package imports + artifact counts as context), each claim validated against the target's spans by a deterministic sub-property gate (`grounding.validate_claims`); separate key-gated pass, never on `index`. **`kb mine`** — ADR-candidate mining over local first-parent history: one `decision` per mined commit, grounded on the commit's changed spans (role `changed`), message verbatim in the payload, same claim floor; `--prs` enriches squash-merged commits with PR title/body (digest identity-bearing in `framework_versions`; enriched prompt pinned by its own `prompt_version`). | thin LLM adapter (`kb.llm`); `PathEngine` + YAML sink registry live in `kb.extract.deterministic.paths` |
 
 ---
 
@@ -511,9 +517,10 @@ Review fact-checked these against current (2026) sources. Caveats are first-clas
    gated in `semantic_grounding_test`).
 3. Recursive invalidation (`artifact_depends_on`), multi-branch dedup, freshness precompute.
 4. Embeddings + `search_knowledge` *(shipped v0.2)*; then `pg_search`/BM25 + RRF if vector ranking is insufficient.
-5. ADR mining from git/PR history — **slice 1 shipped** (`kb mine`: local commit history, decisions
-   grounded on the source commit's changed spans, `adr_mining_test` gate); PR-description mining
-   deferred (network adapter).
+5. ADR mining from git/PR history — **both slices shipped**: `kb mine` (local commit history,
+   decisions grounded on the source commit's changed spans, `adr_mining_test` gate) and
+   `kb mine --prs` (opt-in GitHub PR-text enrichment via `kb.git.forge`; PR-text digest is
+   identity-bearing).
 6. SCIP/scip-python precise-reference backend behind `PathEngine`.
 7. Scale: GC/retention, read replicas, monorepo boundaries, runtime-oracle sandbox hardening.
 
