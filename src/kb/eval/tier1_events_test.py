@@ -73,12 +73,14 @@ FILES = {
     # KNOWN GAPS: listen() inside a function body and a lambda listener
     "src/shop/wiring.py": (
         "from sqlalchemy import event\n"
+        "from sqlalchemy.event import listen\n"
         "from shop.db import OrderRow\n"
         "from shop.hooks import audit_delete\n\n\n"
         "def setup():\n"
         "    event.listen(OrderRow, 'after_insert', audit_delete)\n\n\n"
         "event.listen(OrderRow, 'after_delete', audit_delete)\n"
         "event.listen(OrderRow, 'before_insert', lambda m, c, t: None)\n"
+        "listen(OrderRow, 'before_delete', audit_delete)\n"
     ),
     # fastapi lifecycle + the dynamic-event-name KNOWN GAP
     "src/shop/main.py": (
@@ -104,6 +106,7 @@ EXPECTED_EVENTS = {
     ("sqlalchemy_listens_for", "before_flush", "shop.hooks.on_flush", "Session"),
     ("sqlalchemy_listen", "before_update", "shop.hooks.audit_update", "OrderRow"),
     ("sqlalchemy_listen", "after_delete", "shop.hooks.audit_delete", "OrderRow"),
+    ("sqlalchemy_listen", "before_delete", "shop.hooks.audit_delete", "OrderRow"),
 }
 KNOWN_GAP_FUNCTION_BODY_EVENT = "after_insert"  # listen() inside setup() — conditional, skipped
 KNOWN_GAP_LAMBDA_EVENT = "before_insert"  # lambda listener — no handler span, skipped
@@ -196,12 +199,23 @@ def test_cross_module_listen_grounded_three_files(engine: Engine, tmp_path: Path
     }
 
 
+def test_bare_listen_from_import_extracted(engine: Engine, tmp_path: Path) -> None:
+    """`from sqlalchemy.event import listen; listen(...)` is accepted — the import table proves
+    the bare name IS sqlalchemy.event.listen (the v2 documented gap, closed)."""
+    sha = _index(engine, tmp_path)
+    delete = next(p for p in _payloads(engine, sha) if p["handler"] == "shop.hooks.audit_delete")
+    bare = next(r for r in delete["registrations"] if r["event"] == "before_delete")
+    assert bare["form"] == "call"
+    assert bare["target_resolved"] is True
+    assert bare["registration_module"] == "shop.wiring"
+
+
 def test_listen_inside_function_body_is_a_known_gap(engine: Engine, tmp_path: Path) -> None:
     """The listen() inside setup() is conditional (runs only if setup() runs) — never extracted."""
     sha = _index(engine, tmp_path)
     delete = next(p for p in _payloads(engine, sha) if p["handler"] == "shop.hooks.audit_delete")
     events = [r["event"] for r in delete["registrations"]]
-    assert events == ["after_delete"]  # only the top-level registration ...
+    assert events == ["after_delete", "before_delete"]  # only top-level registrations ...
     assert KNOWN_GAP_FUNCTION_BODY_EVENT not in events  # ... never the one inside setup()
 
 

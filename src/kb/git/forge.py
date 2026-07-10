@@ -48,8 +48,12 @@ class GitHubPRProvider:
         self._slug = slug
         self._token = token
         self._timeout = timeout
+        self._cache: dict[int, PRText] = {}  # successes only: a transient failure must not stick
 
     def fetch(self, number: int) -> PRText | None:
+        cached = self._cache.get(number)
+        if cached is not None:
+            return cached
         headers = {
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
@@ -67,11 +71,13 @@ class GitHubPRProvider:
             return None  # fail-soft: the run degrades to plain mining and counts the failure
         if not isinstance(data, dict):
             return None
-        return PRText(
+        pr = PRText(
             number=number,
             title=str(data.get("title") or ""),
             body=str(data.get("body") or ""),
         )
+        self._cache[number] = pr
+        return pr
 
 
 def origin_slug(repo: pygit2.Repository) -> str | None:

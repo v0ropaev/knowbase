@@ -342,11 +342,19 @@ def test_github_provider_fetch_and_degrade(monkeypatch: pytest.MonkeyPatch) -> N
         seen["auth"] = request.headers.get("Authorization")
         return _Resp(b'{"title": "T", "body": null}')
 
-    monkeypatch.setattr(urllib.request, "urlopen", ok)
-    pr = GitHubPRProvider("o/r", token="tok").fetch(5)
+    calls = {"n": 0}
+
+    def counting_ok(request: urllib.request.Request, timeout: float = 0) -> _Resp:
+        calls["n"] += 1
+        return ok(request, timeout)
+
+    monkeypatch.setattr(urllib.request, "urlopen", counting_ok)
+    provider = GitHubPRProvider("o/r", token="tok")
+    pr = provider.fetch(5)
     assert pr == PRText(number=5, title="T", body="")  # null body normalized to ""
     assert seen["url"] == "https://api.github.com/repos/o/r/pulls/5"
     assert seen["auth"] == "Bearer tok"
+    assert provider.fetch(5) == pr and calls["n"] == 1  # memoized: one network call per PR
 
     def not_found(request: urllib.request.Request, timeout: float = 0) -> _Resp:
         raise urllib.error.HTTPError(request.full_url, 404, "nf", None, None)  # type: ignore[arg-type]

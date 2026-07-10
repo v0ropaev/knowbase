@@ -2,7 +2,8 @@
 
 ``kb index`` runs the spine for one commit; ``watch`` polls a local branch ref and indexes new
 commits incrementally; ``migrate`` applies the schema; ``embed`` populates embeddings;
-``describe`` and ``mine`` are the key-gated LLM passes (descriptions / ADR candidates); ``serve``
+``describe`` and ``mine`` are the key-gated LLM passes (descriptions / ADR candidates —
+``mine --prs`` additionally enriches decisions with GitHub PR text, opt-in network); ``serve``
 hosts the read-only MCP server over stdio; ``introspect`` is the eval-only sandboxed FastAPI
 openapi oracle.
 """
@@ -10,6 +11,7 @@ openapi oracle.
 from __future__ import annotations
 
 import json
+import os
 
 import pygit2
 import typer
@@ -20,6 +22,23 @@ from kb.introspect import introspect_app
 from kb.store.engine import make_engine, resolve_db_url
 
 app = typer.Typer(no_args_is_help=True, help="knowbase — a provenance-grounded knowledge layer.")
+
+
+def _print_version(value: bool) -> None:
+    if value:
+        import kb
+
+        typer.echo(kb.__version__)
+        raise typer.Exit()
+
+
+@app.callback()
+def _main(
+    version: bool = typer.Option(
+        False, "--version", callback=_print_version, is_eager=True, help="Show version and exit."
+    ),
+) -> None:
+    """knowbase — a provenance-grounded knowledge layer."""
 
 
 @app.command()
@@ -152,7 +171,11 @@ def describe(
     from kb.store.queries import latest_ingested_sha
 
     if not has_llm_key():
-        typer.echo("no LLM API key (set ANTHROPIC_API_KEY or OPENAI_API_KEY)")
+        selected = os.environ.get("KB_LLM_PROVIDER", "anthropic")
+        typer.echo(
+            f"no LLM API key for provider '{selected}' (set ANTHROPIC_API_KEY or "
+            "OPENAI_API_KEY; KB_LLM_PROVIDER selects the provider)"
+        )
         raise typer.Exit(code=1)
     engine = make_engine(db_url)
     try:
@@ -161,7 +184,14 @@ def describe(
         if target is None:
             typer.echo("no snapshot to describe")
             raise typer.Exit(code=1)
-        provider = default_llm_provider()
+        try:
+            provider = default_llm_provider()
+        except ImportError as exc:  # slim install/image: the SDKs live in the llm extra
+            typer.echo(
+                f"LLM SDK is not installed ({exc}): run `uv sync --extra llm`, or use an "
+                'image built with EXTRAS="--extra llm"'
+            )
+            raise typer.Exit(code=1) from exc
         result = describe_snapshot(engine, target, provider)
         typer.echo(
             f"described {result.described} artifacts (dropped {result.dropped_claims} claims) "
@@ -194,15 +224,17 @@ def mine(
         None, "--repo-slug", help="GitHub owner/name for --prs (default: parsed from origin)."
     ),
 ) -> None:
-    """Mine ADR candidates from local git history (separate key-gated pass; never on `index`)."""
-    import os
-
+    """Mine ADR candidates from git history (key-gated; `--prs` adds GitHub PR text, opt-in)."""
     from kb.extract.semantic.mine import mine_history  # lazy: keeps the LLM off other cmds
     from kb.llm.providers import default_llm_provider, has_llm_key
     from kb.store.queries import latest_ingested_sha
 
     if not has_llm_key():
-        typer.echo("no LLM API key (set ANTHROPIC_API_KEY or OPENAI_API_KEY)")
+        selected = os.environ.get("KB_LLM_PROVIDER", "anthropic")
+        typer.echo(
+            f"no LLM API key for provider '{selected}' (set ANTHROPIC_API_KEY or "
+            "OPENAI_API_KEY; KB_LLM_PROVIDER selects the provider)"
+        )
         raise typer.Exit(code=1)
     pr_provider = None
     if prs:
@@ -222,7 +254,14 @@ def mine(
         if target is None:
             typer.echo("no indexed snapshot to mine from")
             raise typer.Exit(code=1)
-        provider = default_llm_provider()
+        try:
+            provider = default_llm_provider()
+        except ImportError as exc:  # slim install/image: the SDKs live in the llm extra
+            typer.echo(
+                f"LLM SDK is not installed ({exc}): run `uv sync --extra llm`, or use an "
+                'image built with EXTRAS="--extra llm"'
+            )
+            raise typer.Exit(code=1) from exc
         result = mine_history(
             engine,
             repo,
