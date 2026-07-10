@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **PR-description mining — ADR slice 2** (`kb mine --prs`, `kb.git.forge`): decisions mined
+  from squash-merged commits (subject ending in `(#NN)`) are enriched with the pull request's
+  title and body, fetched from api.github.com via a new `PRProvider` protocol +
+  `GitHubPRProvider` (stdlib urllib; `GITHUB_TOKEN`/`GH_TOKEN` optional — anonymous works for
+  public repos; `--repo-slug` overrides the origin-derived `owner/name`). **Strictly opt-in and
+  the only networked step in the toolchain**: without `--prs`, behavior is byte-identical to
+  slice 1. PR text is prompt context and a payload fact (`pr_number`/`pr_title`/`pr_body`,
+  capped) — never grounding; and because PR text is MUTABLE after merge, a digest of the capped
+  text is folded into `framework_versions` (identity-bearing, the sink-registry precedent), so
+  an edited PR yields a NEW artifact id instead of a silent payload swap. The enriched prompt
+  runs under its own system prompt and carries its own `prompt_version` (`"2+pr1"`); the plain
+  prompt stays byte-identical. A failed fetch (404 / network / rate limit) degrades softly to
+  the byte-identical plain artifact and is counted per run (`pr_enriched` / `pr_fetch_failed`
+  in the CLI summary) — exactly two identities exist per (sha, model): plain and
+  enriched(digest). The ADR-mining HARD gate grows six tests (enrichment identity, floor under
+  enrichment, post-merge-edit → new id, fetch-failure degradation, no-PR byte-compat, slug and
+  provider parsing incl. fail-soft HTTP paths); headline HARD gates stay **fifteen**.
+
 ## [0.8.0] - 2026-07-09
 
 ### Fixed
