@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Bare `from sqlalchemy.event import listen` call-form** (events extractor): a bare
+  `listen(Target, "event", fn)` (aliases included) is now extracted when the module's import
+  table proves the called name IS `sqlalchemy.event.listen` — precision-first, any other bare
+  `listen` stays skipped. Closes the last call-form documented gap; events `extractor_version`
+  2 → 3 (semantic extension — existing `event_handler` ids recompute idempotently). The Tier-1
+  events oracle gains the bare-form registration.
+- **`kb --version`** — prints the (dynamic) package version.
+- **PR-fetch memoization** (`GitHubPRProvider`): one network call per PR number per run
+  (successes only — a transient failure never sticks).
+
+### Fixed
+
+- **CLI UX for the LLM passes**: `kb describe`/`kb mine` now fail with a friendly
+  "install the `llm` extra" message when the SDK is missing (slim installs/images used to
+  surface a raw `ModuleNotFoundError`), and the "no LLM API key" message names the SELECTED
+  provider (`KB_LLM_PROVIDER`) instead of implying either key would do.
+- **Docs drift sweep**: README no longer calls the shipped business-process extractor "future";
+  the events gap list reflects the closed bare-import form; Quickstart documents the `llm`
+  extra, `KB_LLM_MODEL`, and the OpenAI-compatible `OPENAI_BASE_URL` path (OpenRouter — verified
+  live); the Docker section states that `describe`/`mine` need an image built with
+  `EXTRAS="--extra llm"`; the CLI docstrings mention `mine --prs`.
+- **Identity-v2 regression closed for FastAPI** (the old "latent twin" of the events/entities
+  collision, flagged when identity v2 shipped): a new Tier-1 API gate test proves two routes
+  stacked on ONE handler sharing ONE response model (identical evidence spans) yield TWO
+  artifacts with distinct ids.
+
 - **PR-description mining — ADR slice 2** (`kb mine --prs`, `kb.git.forge`): decisions mined
   from squash-merged commits (subject ending in `(#NN)`) are enriched with the pull request's
   title and body, fetched from api.github.com via a new `PRProvider` protocol +

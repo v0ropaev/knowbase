@@ -20,10 +20,11 @@ inside a function/class body is conditional and stays a documented gap. A top-le
 ``if`` is extracted as unconditional (the calls.py precedent).
 
 Fully static: re-parses span sources with tree-sitter; it never imports or executes user code.
-Known gaps (documented, surfaced by the eval gate, never a silent wrong guess): ``listen(...)``
-inside a function/class body, a lambda/attribute/non-first-party ``fn`` (skipped — handler identity
-is load-bearing), the bare ``from sqlalchemy.event import listen`` form, FastAPI lifespan context
-managers, pydantic v1 ``@validator``/``@root_validator``, and dynamic event names
+The bare ``from sqlalchemy.event import listen [as alias]`` form IS accepted when the import
+table proves the called name is ``sqlalchemy.event.listen``. Known gaps (documented, surfaced by
+the eval gate, never a silent wrong guess): ``listen(...)`` inside a function/class body, a
+lambda/attribute/non-first-party ``fn`` (skipped — handler identity is load-bearing), FastAPI
+lifespan context managers, pydantic v1 ``@validator``/``@root_validator``, and dynamic event names
 (``@app.on_event(EVENT)`` is skipped; a dynamic ``listens_for``/``listen`` event or
 ``field_validator`` field is kept but flagged in ``payload.limitations``). Detection is by shape
 only (no data-flow); ``detection_signals`` keeps that honest.
@@ -45,7 +46,7 @@ from kb.extract.deterministic.calls import _caller_scan_root, _import_table, _it
 from kb.structural.interface import ParsedSpan
 
 EXTRACTOR_ID = "events"
-EXTRACTOR_VERSION = "2"
+EXTRACTOR_VERSION = "3"  # v3: bare `from sqlalchemy.event import listen` call-form accepted
 
 _LANGUAGE = Language(tsp.language())
 _VERSIONED = ("pydantic", "fastapi", "sqlalchemy")
@@ -151,9 +152,20 @@ class EventExtractor:
             table = None  # import table only if the module actually has a listen() candidate
             for call in _iter_calls(scan_root):
                 callee = call.child_by_field_name("function")
-                if callee is None or callee.type != "attribute":
-                    continue  # bare `listen(...)` (from-import form) -> documented gap
-                if _text(callee.child_by_field_name("attribute")) != "listen":
+                if callee is None:
+                    continue
+                if callee.type == "attribute":
+                    if _text(callee.child_by_field_name("attribute")) != "listen":
+                        continue
+                elif callee.type == "identifier":
+                    # bare `from sqlalchemy.event import listen [as l]; l(...)`: accept ONLY a
+                    # name the import table proves to BE sqlalchemy.event.listen — precision
+                    # first, any other bare `listen` (a local def, another library) is skipped
+                    if table is None:
+                        table = _import_table(self._parser, ctx, module, module_set)
+                    if table.symbols.get(_text(callee) or "") != ("sqlalchemy.event", "listen"):
+                        continue
+                else:
                     continue
                 positional = _positional_args(call.child_by_field_name("arguments"))
                 if len(positional) < 3:

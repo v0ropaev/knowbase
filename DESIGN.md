@@ -270,12 +270,13 @@ test.)
   SQLAlchemy `@event.listens_for` — AND module-level call-form `event.listen(Target, "e", fn)`
   registrations (family `sqlalchemy_listen`; `fn` resolved same-module or via the calls.py import
   tables — the handler may live in another module than the listen; grounded additionally on the
-  registering file's module span, role `registration_site`). Stacked decorators and call sites
+  registering file's module span, role `registration_site`; the bare
+  `from sqlalchemy.event import listen [as alias]` form is accepted when the import table proves
+  the called name IS `sqlalchemy.event.listen`). Stacked decorators and call sites
   aggregate in `payload.registrations`; one artifact per handler. Grounded on the handler span +
   cross-file on the listened-to class; hand-labeled Tier-1 gate incl. a three-file provenance case
   (handler + target class + registration site). Known gaps (asserted): `listen(...)` inside a
-  function/class body (conditional), lambda/attribute `fn`, the bare
-  `from sqlalchemy.event import listen` form, lifespan, pydantic-v1, dynamic names.
+  function/class body (conditional), lambda/attribute `fn`, lifespan, pydantic-v1, dynamic names.
 - **(e)** Call-graph edge extractor *(shipped)*: one `call_edge` per RESOLVED caller→callee pair,
   three deterministic tiers (same-module; imported — **cross-file**; `self.` method of the same
   class); precision-first — only first-party-resolved edges are emitted, recall bounded by
@@ -507,8 +508,8 @@ Review fact-checked these against current (2026) sources. Caveats are first-clas
 1. Second deterministic family: **entities (pydantic/dataclass/SQLAlchemy) — shipped** (static
    tree-sitter, hand-labeled Tier-1 gate); **events — shipped** (decorator registrations for
    pydantic/FastAPI/SQLAlchemy plus module-level call-form `event.listen` — v2, static
-   tree-sitter, hand-labeled Tier-1 gate; function-body/lambda/bare-import forms and lifespan
-   stay documented gaps).
+   tree-sitter, hand-labeled Tier-1 gate; the bare from-import form is resolved via the import
+   table; function-body/lambda forms and lifespan stay documented gaps).
 2. The **one** grounded business-process extractor (named real path + labeler + validator +
    deterministic sub-property gate) — **shipped**: the `call_edge` extractor + Tier-1 calls gate;
    the `process_path` builder (PathEngine BFS + sink registry + `.kb/sinks.yaml` override,
